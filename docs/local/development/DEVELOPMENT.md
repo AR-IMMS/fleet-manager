@@ -4,9 +4,10 @@
 
 - Install supported Go toolchain (version set in `go.mod` and CI; choose/pin deliberately).
 - Use pinned `github.com/open-telemetry/opamp-go` dependency; do not track `main` in production builds.
+- Read the [accepted Fleet overview](../../shared/architecture/fleet-management/overview.md) and [C01–C04 index](../../shared/contracts/fleet-management/README.md). Proposed endpoints and schemas need owner approval before implementation.
 - Follow [Clean Architecture](../architecture/clean-architecture.md) and [quality gates](QUALITY_GATES.md).
 
-## Commands (once Go module exists)
+## Commands
 
 ```bash
 go mod download
@@ -33,6 +34,7 @@ golangci-lint run ./...
 - Bind to `127.0.0.1` for unauthenticated development experiments only.
 - Never expose a demo `Accept: true` connection callback publicly.
 - Record in docs whether an endpoint is HTTP/WebSocket, whether TLS is enabled, and how the dev identity verifier works.
+- The current repository has no running Fleet server. Do not present bootstrap callback tests as enrollment, durable publication or production interoperability evidence.
 
 ## Debug checklist
 
@@ -43,7 +45,9 @@ golangci-lint run ./...
 | Config not applied | Client capability, matching config hash, Supervisor/Collector logs |
 | Reconnect creates duplicates | Principal↔UID mapping, session generation, stale close |
 | Healthy agent with no metrics | OpAMP health is separate from OTLP exporter/data freshness |
+| Desired revision disappears after restart | Fleet durable desired/publication records and reconciliation wakeup |
+| Agent inventory seems empty | Snapshot provider/scope and COMPLETE/PARTIAL/FAILED semantics |
 
 ## When adding feature
 
-Start with a focused use case and acceptance tests. Place protocol mapping in `transport/opamp`, domain rules within the relevant feature, and external integrations behind application ports. Do not add empty packages for future roadmap items.
+Start with a focused use case and acceptance tests from the [shared roadmap](../../shared/integration/fleet-management/implementation-roadmap.md). Place protocol mapping in `transport/opamp`, HTTPS and persistence in adapters, domain rules within the relevant Fleet feature, and external integrations behind application ports. Add durable persistence for Fleet-owned state as each approved vertical slice requires it. Do not add empty packages for future roadmap items.

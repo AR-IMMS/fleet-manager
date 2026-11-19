@@ -2,9 +2,10 @@
 
 | Area | Purpose | Authority |
 |---|---|---|
-| [`local/architecture`](local/architecture/system-overview.md) | What this service does and how it is structured | This repo |
+| [`shared/architecture/fleet-management`](shared/architecture/fleet-management/overview.md) | Accepted cross-system Fleet ownership | `AR-IMMS/shared-docs` |
+| [`shared/contracts/fleet-management`](shared/contracts/fleet-management/README.md) | C01–C04 decisions, draft wire proposals and open questions | `AR-IMMS/shared-docs`; follow each decision's status |
+| [`local/architecture`](local/architecture/system-overview.md) | Fleet repository structure and target flows | This repo, subordinate to accepted shared decisions |
 | [`local/development`](local/development/CODING_POLICY.md) | Implementation and quality rules | This repo |
-| [`local/decisions`](local/decisions/README.md) | Proposed/accepted service-level ADRs | This repo |
-| [`shared`](shared/README.md) | Cross-repo integration references | `AR-IMMS/shared-docs` when approved |
+| [`local/decisions`](local/decisions/README.md) | Service-level ADRs | This repo; cannot approve cross-system contracts alone |
 
-Start with the system overview. Detailed specifications are reference material, not prerequisites for every PR.
+Read the shared Fleet contract index before changing a cross-system boundary. Some older shared pages describe the former OpAMP-only adapter model; C01–C04 and the Fleet architecture overview describe the accepted B+ target. The implementation status must still be checked in code.

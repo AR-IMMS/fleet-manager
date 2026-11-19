@@ -1,6 +1,6 @@
 # Coding policy — human and AI contributors
 
-**Goal:** reliable, maintainable Go protocol service with a small amount of deliberate architecture. This policy applies to generated code too.
+**Goal:** reliable, maintainable Go Fleet Management Server with durable fleet authority and native OpAMP integration. This policy applies to generated code too. Read the [shared Fleet contracts](../../shared/contracts/fleet-management/README.md) before changing a cross-system boundary.
 
 ## 1. Engineering standards
 
@@ -9,8 +9,8 @@
 | Correctness over speed | Verify upstream protocol behavior; do not fabricate OpAMP fields/capabilities. |
 | Clean boundaries | Domain/application independent of transport, framework, protobuf and storage. |
 | Security by default | Authenticate, authorize, TLS outside loopback; fail closed. |
-| Explicit ownership | Core owns fleet policy; Supervisor owns Collector lifecycle; Server owns sessions/protocol. |
-| Minimal design | No speculative framework, registry, database or custom protocol. |
+| Explicit ownership | Core owns business authorization/Node authority; Fleet owns registration, credentials, desired policy/publications and observations; Supervisor owns Collector execution. |
+| Minimal design | Build only required Fleet persistence and use cases; no speculative framework or custom protocol. |
 | Small changes | Prefer reviewable vertical slices and coherent commits. |
 | Evidence | A claim is complete only with tests and clear evidence. |
 
@@ -31,8 +31,10 @@
 - Check negotiated client/server capabilities before sending optional messages.
 - Treat connections as transient and identity as authenticated. An OpAMP `instance_uid` is an identifier, **not proof of identity**.
 - Maintain a clear status vocabulary: connected, reported healthy, delivery attempted, applied, failed, unknown, offline.
-- Preserve remote-config hash and revision correlation; do not mark applied from send success or from a stale response.
-- Do not invent an Agent↔Supervisor integration API: record unresolved cross-repo contracts in `docs/shared/contracts`.
+- Persist desired revisions, operations and publication/hash correlation durably before delivery. Do not mark applied from send success or a stale response.
+- Keep Agent `agent_id`, observed `host_id`, Core `node_id`, and Supervisor `instance_uid` distinct; only bind UID after verified authentication.
+- Preserve separate states for desired, published, reported applied, effective, Collector ready and OTLP delivered.
+- For Agent↔Fleet HTTPS and Core↔Fleet management operations, use accepted ownership but do not treat C01–C03 draft paths and schemas as approved.
 - Do not add proprietary custom OpAMP messages without reviewing upstream extension mechanisms and compatibility.
 
 ## 4. Security checklist
@@ -43,6 +45,7 @@
 - Reject unsupported authorization states and expired/revoked credentials; do not allow anonymous production mode.
 - Rate-limit/restrict connection attempts where appropriate; do not reveal credential internals through errors.
 - Minimize privileges of deployment identities and CI workflows; no production secret in repo/fixtures.
+- Protect invitation/credential material at rest, prevent replay, and scope every management and observation request to a verified principal. Do not trust body-supplied actor IDs or machine evidence as authorization.
 
 ## 5. AI coding workflow
 
@@ -56,9 +59,9 @@ flowchart LR
   Review --> PR[PR with evidence and doc changes]
 ```
 
-**AI assistant must:** state assumptions, cite upstream source for unfamiliar protocol semantics, distinguish implemented vs proposed, follow existing context boundaries, avoid unrelated refactoring, and report commands actually run. When uncertain, leave a TODO with rationale and ask for review rather than silently guessing.
+**AI assistant must:** state assumptions, cite upstream source for unfamiliar protocol semantics, distinguish implemented vs accepted target vs proposed wire details, follow existing context boundaries, avoid unrelated refactoring, and report commands actually run. When uncertain, record the OPEN decision in the owning shared contract and ask the named owners for review rather than silently guessing.
 
-**AI assistant must not:** bypass quality checks, add hidden compatibility fallbacks, weaken TLS/auth, introduce new background processes or databases without an ADR, or modify Telemetry Agent / Core repos as part of a server-only change.
+**AI assistant must not:** bypass quality checks, add hidden compatibility fallbacks, weaken TLS/auth, add unowned background processes, invent database atomicity guarantees, or modify Telemetry Agent / Core repos as part of a Fleet-only change.
 
 ## 6. Definition of done
 
@@ -66,4 +69,4 @@ flowchart LR
 - `gofmt`, `go vet`, tests with race detector, and build pass for affected packages.
 - User-visible operations and failure modes are documented; relevant diagrams updated.
 - No secrets in code or test logs; PR explicitly states security implications.
-- If contract changed, update shared proposal and obtain cross-service review before assuming it is authoritative.
+- If a contract changes, propose it in shared docs and obtain cross-service owner review before treating proposed wire details as authoritative.

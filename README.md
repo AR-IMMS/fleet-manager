@@ -1,57 +1,38 @@
-# AR-IMMS OpAMP Server
+# AR-IMMS Fleet Management Server
 
-> Go-based OpAMP protocol control plane for managing a fleet of data collection agents. **Planning / bootstrap documentation** — implementation status must be verified in code.
+Go service for AR-IMMS fleet management. The accepted target architecture gives Fleet authority over installation registration and credentials, desired Collector configuration, revisions and publications, authenticated OpAMP sessions, observed outcomes, and fleet execution audit. **This repository currently contains a bootstrap slice, not that completed service.**
 
-## At a glance
+## System boundary
 
-| Question | Answer |
+| Component | Owns |
 |---|---|
-| Why? | Connect managed agents, receive status, deliver remote configuration and report outcomes. |
-| Who owns fleet policy? | AR-IMMS Core (NestJS). |
-| Who owns OpAMP sessions? | This service. |
-| Who manages Collector processes? | Official OpAMP Supervisor (on managed hosts). |
-| Who discovers services / integrations? | AR-IMMS Telemetry Agent. |
-| Does this service store desired configuration? | **No**: Core is authoritative; a transient delivery cache is permitted only with reconciliation rules. |
-| Current first target | Standalone authenticated OpAMP server + fake clients, then Supervisor interoperability. |
+| Core Backend | IAM, Node/Asset binding, business authorization and audit; authorized monitoring intent |
+| Fleet Management Server | Fleet credentials, desired policy and durable publications, sessions, observations and execution audit |
+| Telemetry Agent | Stable installation UUID, protected credentials, host evidence, local inventory/health, OS exporters and Supervisor provisioning |
+| Official OpAMP Supervisor | Collector process and configuration execution in Fleet-managed native mode |
+| OTel Collector | Telemetry collection and OTLP export |
 
-```mermaid
-flowchart LR
-  UI[Fleet UI] --> Core[Core Backend
-Fleet policies / identity / desired state]
-  Core <-->|Internal commands + events| S[OpAMP Server
-Go]
-  S <-->|OpAMP + TLS| Sup[OpAMP Supervisor
-Collector manager]
-  Sup --> Col[OTel Collector]
-  Agent[AR-IMMS Telemetry Agent
-Discovery / integration intent] -->|Inventory / intent: design TBD| Core
-  Col -->|OTLP telemetry| GW[OTel Gateway]
+Fleet receives authorized management requests from Core, Agent enrollment and observations over authenticated HTTPS, and native OpAMP traffic from the official Supervisor over WSS. Exact REST paths, schemas, authentication scopes, UID mapping, config composition and migration remain under review in the shared contracts. Do not implement their illustrative examples as final APIs.
+
+## Current implementation
+
+The code currently provides runtime configuration validation, a principal/authentication use case, and an OpAMP connection callback adapter with focused tests. It does **not** yet provide a running Fleet server, durable database, enrollment exchange, Core management API, session registry, configuration publication, observation ingestion, or production interoperability. See the [implementation roadmap](docs/shared/integration/fleet-management/implementation-roadmap.md) for target checkpoints and decision gates.
+
+## Read first
+
+1. [Shared Fleet contract index](docs/shared/contracts/fleet-management/README.md) and [accepted architecture overview](docs/shared/architecture/fleet-management/overview.md) — cross-system source of truth.
+2. [Local system overview](docs/local/architecture/system-overview.md) and [flows](docs/local/architecture/flows.md) — this repository's interpretation and implementation status.
+3. [Clean architecture](docs/local/architecture/clean-architecture.md), [development guide](docs/local/development/DEVELOPMENT.md), [coding policy](docs/local/development/CODING_POLICY.md), and [quality gates](docs/local/development/QUALITY_GATES.md).
+
+## Verify the bootstrap slice
+
+```bash
+lefthook install
+golangci-lint run ./...
+go vet ./...
+go test -race ./...
+go build ./...
+go mod tidy -diff
 ```
 
-**Diagram caveat:** the Agent-to-Core discovery interface and Core-to-Server contract are planned interfaces, not already implemented.
-
-## Read this, not everything
-
-1. [System overview](docs/local/architecture/system-overview.md) — diagram, ownership and boundaries.
-2. [Main flows](docs/local/architecture/flows.md) — connection, status, remote config, recovery.
-3. [Clean Architecture / code structure](docs/local/architecture/clean-architecture.md) — where new code belongs.
-4. [Coding policy](docs/local/development/CODING_POLICY.md) — rules for human and AI coding.
-5. [Quality gates](docs/local/development/QUALITY_GATES.md) — what must pass before merge/release.
-
-## First implementation target
-
-- Start / stop cleanly and expose a configurable OpAMP endpoint.
-- Authenticate clients **before** enabling externally reachable access.
-- Track active authenticated sessions and handle close/reconnect without stale ownership.
-- Accept agent descriptions/status and emit normalized events.
-- Deliver desired remote configuration to capable clients and distinguish **sent** from **applied**.
-- Test independently with fake OpAMP clients, then an official Supervisor.
-
-Deferred: UI, fleet rollouts, package upgrades, generalized multi-tenant storage, production deployment.
-
-## Source of truth & references
-
-- [OpAMP protocol specification](https://opentelemetry.io/docs/specs/opamp/)
-- [Official Go SDK](https://github.com/open-telemetry/opamp-go)
-- [Collector Supervisor implementation](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/cmd/opampsupervisor)
-- Cross-repository decisions belong in **AR-IMMS `shared-docs`**. The `docs/shared` directory here contains integration references/proposals, not an independently authoritative duplicate.
+The official [OpAMP specification](https://opentelemetry.io/docs/specs/opamp/) governs protocol semantics. The shared C01–C04 contracts govern accepted AR-IMMS ownership; their proposed wire examples are not approved endpoints.

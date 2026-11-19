@@ -1,12 +1,7 @@
-# Architecture decisions
+# Local architecture decisions
 
-Keep ADRs short. An accepted ADR must record **context, decision, consequences, alternatives and date**.
+Keep service-level ADRs short. An accepted ADR records context, decision, consequences, alternatives and date. Use `0001-short-title.md`; mark drafts `Proposed` until reviewed.
 
-Recommended first ADRs (not yet accepted):
+Local ADRs may choose Fleet-internal persistence, outbox, session, deployment, and runtime designs **within** the accepted ownership in [shared Fleet architecture](../../shared/architecture/fleet-management/overview.md). They cannot approve C01–C04 wire schemas, auth scopes, UID mapping, composition or migration on behalf of Core and Agent owners. Record those decisions in the [canonical contract index](../../shared/contracts/fleet-management/README.md).
 
-1. Server remains a protocol boundary; Core owns Fleet business and desired state.
-2. Identity mapping and authenticated OpAMP session policy.
-3. One Collector lifecycle owner: official Supervisor.
-4. Core↔OpAMP integration transport and event reliability strategy.
-
-Use `0001-short-title.md`; proposed decisions must be marked `Proposed` until reviewed.
+Useful first ADR topics: durable state/outbox and atomicity assumptions; session ownership and reconnect races; storage/recovery for enrollment results; publication hash canonicalization after cross-system agreement.
