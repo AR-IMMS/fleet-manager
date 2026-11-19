@@ -201,6 +201,8 @@ linters:
           allow:
             - $gostd
             - github.com/AR-IMMS/fleet-manager/internal/platform
+            - github.com/AR-IMMS/fleet-manager/internal/shared/correlation
+            - google.golang.org/grpc
             - github.com/go-playground/validator/v10
             - github.com/google/uuid
             - go.mongodb.org/mongo-driver
@@ -209,6 +211,13 @@ linters:
               desc: platform must not import app
             - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts
               desc: platform must not import contexts
+        shared-correlation:
+          list-mode: strict
+          files:
+            - "**/internal/shared/correlation/*.go"
+          allow:
+            - $gostd
+            - github.com/AR-IMMS/fleet-manager/internal/shared/correlation
         app-config:
           list-mode: strict
           files:

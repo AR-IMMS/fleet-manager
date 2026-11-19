@@ -6,14 +6,13 @@ import (
 	"net/http"
 	"unicode"
 
+	"github.com/AR-IMMS/fleet-manager/internal/shared/correlation"
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 )
 
 // RequestIDHeader is the response and optional request correlation header.
 const RequestIDHeader = "X-Request-Id"
-
-type requestIDContextKey struct{}
 
 // IDGenerator creates a request correlation identifier.
 type IDGenerator interface {
@@ -32,7 +31,7 @@ func (uuidGenerator) NewID() (string, error) {
 
 // RequestIDFromContext returns the selected request ID, if the middleware set one.
 func RequestIDFromContext(ctx context.Context) string {
-	id, _ := ctx.Value(requestIDContextKey{}).(string)
+	id, _ := correlation.RequestIDFromContext(ctx)
 	return id
 }
 
@@ -46,8 +45,13 @@ func RequestIDMiddleware(generator IDGenerator) func(http.Handler) http.Handler 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			provided := r.Header.Values(RequestIDHeader)
-			requestID := ""
-			if len(provided) == 1 && validRequestID(provided[0], validate) {
+			requestID, exists := correlation.RequestIDFromContext(r.Context())
+			if exists {
+				if !validRequestID(requestID, validate) {
+					http.Error(w, "request could not be processed", http.StatusInternalServerError)
+					return
+				}
+			} else if len(provided) == 1 && validRequestID(provided[0], validate) {
 				requestID = provided[0]
 			} else {
 				generated, err := generator.NewID()
@@ -59,7 +63,7 @@ func RequestIDMiddleware(generator IDGenerator) func(http.Handler) http.Handler 
 				requestID = generated
 			}
 			w.Header().Set(RequestIDHeader, requestID)
-			ctx := context.WithValue(r.Context(), requestIDContextKey{}, requestID)
+			ctx := correlation.WithRequestID(r.Context(), requestID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
