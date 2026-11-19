@@ -58,12 +58,14 @@ type Problem struct {
 	Errors    []FieldError `json:"errors,omitempty"`
 }
 
-var errorCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
+var (
+	problemValidator = validator.New()
+	errorCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
+)
 
 // ValidateProblem checks the reusable Problem constraints in the baseline draft.
 func ValidateProblem(problem Problem) error {
-	validate := validator.New()
-	if err := validate.Struct(problem); err != nil {
+	if err := problemValidator.Struct(problem); err != nil {
 		return fmt.Errorf("invalid problem: %w", err)
 	}
 	if problem.Status < http.StatusBadRequest || problem.Status > 599 {
@@ -72,41 +74,67 @@ func ValidateProblem(problem Problem) error {
 	if !errorCodePattern.MatchString(problem.Code) {
 		return fmt.Errorf("problem code does not match the baseline format")
 	}
-	if _, err := url.Parse(problem.Type); err != nil {
-		return fmt.Errorf("problem type must be a URI reference: %w", err)
+	if err := validateURIReference("type", problem.Type); err != nil {
+		return err
 	}
-	if _, err := url.Parse(problem.Instance); err != nil {
-		return fmt.Errorf("problem instance must be a URI reference: %w", err)
+	if err := validateURIReference("instance", problem.Instance); err != nil {
+		return err
 	}
-	for i, fieldError := range problem.Errors {
+	return validateFieldErrors(problem.Errors)
+}
+
+func validateURIReference(fieldName, raw string) error {
+	if _, err := url.Parse(raw); err != nil {
+		return fmt.Errorf("problem %s must be a URI reference: %w", fieldName, err)
+	}
+	return nil
+}
+
+func validateFieldErrors(fieldErrors []FieldError) error {
+	for i, fieldError := range fieldErrors {
 		if fieldError.Field == nil {
 			return fmt.Errorf("field error %d path must be an array", i)
 		}
-		if err := validate.Struct(fieldError); err != nil {
+		if err := problemValidator.Struct(fieldError); err != nil {
 			return fmt.Errorf("invalid field error %d: %w", i, err)
 		}
 		for j, segment := range fieldError.Field {
-			switch value := segment.(type) {
-			case string:
-				// Object property names are represented as strings.
-			case int:
-				if value < 0 {
-					return fmt.Errorf("field error %d path segment %d has a negative index", i, j)
-				}
-			case int32:
-				if value < 0 {
-					return fmt.Errorf("field error %d path segment %d has a negative index", i, j)
-				}
-			case int64:
-				if value < 0 {
-					return fmt.Errorf("field error %d path segment %d has a negative index", i, j)
-				}
-			default:
-				return fmt.Errorf("field error %d path segment %d must be a string or nonnegative integer", i, j)
+			if err := validatePathSegment(i, j, segment); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
+}
+
+func validatePathSegment(errIdx, segIdx int, segment any) error {
+	switch value := segment.(type) {
+	case string:
+		return nil
+	case int:
+		if value >= 0 {
+			return nil
+		}
+	case int8:
+		if value >= 0 {
+			return nil
+		}
+	case int16:
+		if value >= 0 {
+			return nil
+		}
+	case int32:
+		if value >= 0 {
+			return nil
+		}
+	case int64:
+		if value >= 0 {
+			return nil
+		}
+	case uint, uint8, uint16, uint32, uint64, uintptr:
+		return nil
+	}
+	return fmt.Errorf("field error %d path segment %d must be a non-negative integer or string", errIdx, segIdx)
 }
 
 // WriteJSON marshals the response completely before committing headers or status.
