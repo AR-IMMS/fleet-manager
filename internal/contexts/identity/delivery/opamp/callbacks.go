@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/AR-IMMS/fleet-manager/internal/identity/application"
-	"github.com/AR-IMMS/fleet-manager/internal/identity/domain"
+	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/application"
+	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain"
 	"github.com/open-telemetry/opamp-go/protobufs"
 	"github.com/open-telemetry/opamp-go/server/types"
 )

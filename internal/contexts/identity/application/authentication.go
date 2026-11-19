@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/AR-IMMS/fleet-manager/internal/identity/domain"
+	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain"
 )
 
 var (
@@ -25,7 +25,7 @@ var (
 // and return ErrUnauthenticated for rejected credentials. Infrastructure failures
 // must remain distinguishable from authentication rejection.
 //
-// A future Core adapter implements this port. Tests use a deterministic fake.
+// Fleet credential-authority adapters implement this port. Tests use a deterministic fake.
 type IdentityVerifier interface {
 	Verify(ctx context.Context, credential string) (domain.Principal, error)
 }

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AR-IMMS/fleet-manager/internal/identity/domain"
+	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain"
 )
 
 // verifierFunc adapts a typed function to IdentityVerifier.

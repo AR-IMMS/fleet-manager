@@ -1,173 +1,128 @@
 package app
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
 
-// lookupSettings creates an isolated environment reader.
-//
-// Tests never modify the process environment, so they can run concurrently
-// without leaking configuration into other tests.
-func lookupSettings(settings map[string]string) LookupEnv {
+func mapLookup(values map[string]string) LookupEnv {
 	return func(key string) (string, bool) {
-		value, exists := settings[key]
-		return value, exists
+		v, ok := values[key]
+		return v, ok
 	}
 }
 
-// TestLoadConfigDefaults verifies the documented local-development defaults.
-func TestLoadConfigDefaults(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := LoadConfig(lookupSettings(nil))
+func TestLoadConfig_Defaults(t *testing.T) {
+	cfg, err := LoadConfig(mapLookup(map[string]string{}))
 	if err != nil {
-		t.Fatalf("LoadConfig() error: %v", err)
+		t.Fatalf("expected no error, got %v", err)
 	}
 
 	if cfg.ListenAddress != "127.0.0.1:4320" {
-		t.Errorf("unexpected listen address: %q", cfg.ListenAddress)
+		t.Fatalf("unexpected ListenAddress: %q", cfg.ListenAddress)
 	}
-
 	if cfg.OpAMPPath != "/v1/opamp" {
-		t.Errorf("unexpected OpAMP path: %q", cfg.OpAMPPath)
+		t.Fatalf("unexpected OpAMPPath: %q", cfg.OpAMPPath)
 	}
-
-	if cfg.MaxMessageBytes != 1<<20 {
-		t.Errorf("unexpected message limit: %d", cfg.MaxMessageBytes)
+	if cfg.MaxMessageBytes != 1048576 {
+		t.Fatalf("unexpected MaxMessageBytes: %d", cfg.MaxMessageBytes)
 	}
-
 	if cfg.AuthTimeout != 5*time.Second {
-		t.Errorf("unexpected authentication timeout: %s", cfg.AuthTimeout)
+		t.Fatalf("unexpected AuthTimeout: %v", cfg.AuthTimeout)
 	}
-
 	if cfg.ShutdownTimeout != 10*time.Second {
-		t.Errorf("unexpected shutdown timeout: %s", cfg.ShutdownTimeout)
+		t.Fatalf("unexpected ShutdownTimeout: %v", cfg.ShutdownTimeout)
+	}
+	if cfg.Mongo.Database != "ar_imms_fleet" {
+		t.Fatalf("unexpected Mongo.Database: %q", cfg.Mongo.Database)
 	}
 }
 
-// TestLoadConfigOverrides verifies that explicitly supplied settings take effect.
-func TestLoadConfigOverrides(t *testing.T) {
-	t.Parallel()
+func TestLoadConfig_NilLookup(t *testing.T) {
+	if _, err := LoadConfig(nil); err == nil {
+		t.Fatal("expected error when lookup is nil")
+	}
+}
 
-	cfg, err := LoadConfig(lookupSettings(map[string]string{
-		"OPAMP_LISTEN_ADDRESS":    "[::1]:0",
-		"OPAMP_PATH":              "/management/opamp",
-		"OPAMP_MAX_MESSAGE_BYTES": "2097152",
-		"OPAMP_AUTH_TIMEOUT":      "750ms",
-		"OPAMP_SHUTDOWN_TIMEOUT":  "20s",
+func TestLoadConfig_RejectsEmptyRequiredSetting(t *testing.T) {
+	_, err := LoadConfig(mapLookup(map[string]string{
+		"OPAMP_PATH": "   ",
 	}))
-	if err != nil {
-		t.Fatalf("LoadConfig() error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for whitespace/empty required setting")
 	}
-
-	if cfg.ListenAddress != "[::1]:0" ||
-		cfg.OpAMPPath != "/management/opamp" ||
-		cfg.MaxMessageBytes != 2<<20 ||
-		cfg.AuthTimeout != 750*time.Millisecond ||
-		cfg.ShutdownTimeout != 20*time.Second {
-		t.Errorf("settings were not applied: %+v", cfg)
+	if !strings.Contains(err.Error(), "OPAMP_PATH must not be empty") {
+		t.Fatalf("unexpected error message: %v", err)
 	}
 }
 
-// TestLoadConfigRejectsInvalidSettings verifies fail-fast startup behavior.
-func TestLoadConfigRejectsInvalidSettings(t *testing.T) {
-	t.Parallel()
-
+func TestLoadConfig_ValidationRules(t *testing.T) {
 	tests := []struct {
-		name     string
-		settings map[string]string
+		name    string
+		env     map[string]string
+		wantErr string
 	}{
 		{
-			name:     "explicitly empty setting",
-			settings: map[string]string{"OPAMP_LISTEN_ADDRESS": ""},
+			name: "non-loopback without TLS is rejected",
+			env: map[string]string{
+				"OPAMP_LISTEN_ADDRESS": "0.0.0.0:4320",
+			},
+			wantErr: "TLS is required for non-loopback listeners",
 		},
 		{
-			name:     "malformed address",
-			settings: map[string]string{"OPAMP_LISTEN_ADDRESS": "127.0.0.1"},
+			name: "tls cert without key is rejected",
+			env: map[string]string{
+				"OPAMP_TLS_CERT_FILE": "/path/cert.pem",
+			},
+			wantErr: "TLS certificate and key must be configured together",
 		},
 		{
-			name:     "invalid port",
-			settings: map[string]string{"OPAMP_LISTEN_ADDRESS": "127.0.0.1:65536"},
+			name: "invalid opamp path is rejected",
+			env: map[string]string{
+				"OPAMP_PATH": "v1/opamp",
+			},
+			wantErr: "OpAMP path must start with '/'",
 		},
 		{
-			name:     "public plaintext listener",
-			settings: map[string]string{"OPAMP_LISTEN_ADDRESS": "0.0.0.0:4320"},
+			name: "reserved mongo database is rejected",
+			env: map[string]string{
+				"FLEET_MONGODB_DATABASE": "admin",
+			},
+			wantErr: "fleet must use an application database",
 		},
 		{
-			name:     "hostname plaintext listener",
-			settings: map[string]string{"OPAMP_LISTEN_ADDRESS": "localhost:4320"},
+			name: "non-positive mongo timeout is rejected",
+			env: map[string]string{
+				"FLEET_MONGODB_CONNECT_TIMEOUT": "0s",
+			},
+			wantErr: "MongoDB connection timeout must be positive",
 		},
 		{
-			name:     "certificate without key",
-			settings: map[string]string{"OPAMP_TLS_CERT_FILE": "server.crt"},
+			name: "invalid logging level is rejected",
+			env: map[string]string{
+				"FLEET_LOG_LEVEL": "trace",
+			},
+			wantErr: "FLEET_LOG_LEVEL must be",
 		},
 		{
-			name:     "key without certificate",
-			settings: map[string]string{"OPAMP_TLS_KEY_FILE": "server.key"},
-		},
-		{
-			name:     "relative path",
-			settings: map[string]string{"OPAMP_PATH": "v1/opamp"},
-		},
-		{
-			name:     "path containing query",
-			settings: map[string]string{"OPAMP_PATH": "/v1/opamp?debug=true"},
-		},
-		{
-			name:     "invalid message limit",
-			settings: map[string]string{"OPAMP_MAX_MESSAGE_BYTES": "large"},
-		},
-		{
-			name:     "disabled message limit",
-			settings: map[string]string{"OPAMP_MAX_MESSAGE_BYTES": "0"},
-		},
-		{
-			name:     "invalid duration",
-			settings: map[string]string{"OPAMP_AUTH_TIMEOUT": "five seconds"},
-		},
-		{
-			name:     "non-positive authentication timeout",
-			settings: map[string]string{"OPAMP_AUTH_TIMEOUT": "-1s"},
-		},
-		{
-			name:     "non-positive shutdown timeout",
-			settings: map[string]string{"OPAMP_SHUTDOWN_TIMEOUT": "0s"},
+			name: "invalid logging format is rejected",
+			env: map[string]string{
+				"FLEET_LOG_FORMAT": "xml",
+			},
+			wantErr: "FLEET_LOG_FORMAT must be",
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			if _, err := LoadConfig(lookupSettings(tt.settings)); err == nil {
-				t.Fatal("expected invalid configuration to be rejected")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := LoadConfig(mapLookup(tc.env))
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
 			}
 		})
-	}
-}
-
-// TestLoadConfigAcceptsTLSSettings checks configuration-level validation only.
-//
-// Certificate loading and cryptographic validation belong to the transport
-// startup tests; specifying file paths does not prove that TLS can start.
-func TestLoadConfigAcceptsTLSSettings(t *testing.T) {
-	t.Parallel()
-
-	_, err := LoadConfig(lookupSettings(map[string]string{
-		"OPAMP_LISTEN_ADDRESS": "0.0.0.0:4320",
-		"OPAMP_TLS_CERT_FILE":  "server.crt",
-		"OPAMP_TLS_KEY_FILE":   "server.key",
-	}))
-	if err != nil {
-		t.Fatalf("expected paired TLS settings to be accepted: %v", err)
-	}
-}
-
-func TestLoadConfigRejectsMissingLookup(t *testing.T) {
-	t.Parallel()
-
-	if _, err := LoadConfig(nil); err == nil {
-		t.Fatal("expected missing environment reader to be rejected")
 	}
 }

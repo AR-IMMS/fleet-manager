@@ -23,10 +23,10 @@ Domain and application packages must not import OpAMP protobufs, `net/http`, fra
 | Rendering, publication and reported outcomes | `configuration` | Durable hash/revision mapping before native OpAMP send; distinguish observed evidence |
 | Agent inventory and health evidence | `observations` | Agent HTTPS adapter; scope, completeness, freshness and provenance rules |
 | Fleet execution audit | `audit` or cohesive feature records | Correlate Core operation IDs without copying business audit or secrets |
-| Native OpAMP protocol mapping | `transport/opamp` | Protobufs, capability checks and callback translation only |
+| Native OpAMP protocol mapping | `contexts/identity/delivery/opamp` (current) | Protobufs, capability checks and callback translation only |
 | Runtime wiring and settings | `app`, `cmd` | Listener, TLS, storage and shutdown lifecycle |
 
-Package names are suggestions, not a required skeleton. Current code has `internal/app`, `internal/identity`, and `internal/transport/opamp`; no other feature package is implemented yet.
+Package names are suggestions, not a required skeleton. Current code has `internal/app`, `internal/contexts/identity`, and `internal/platform`; `configuration` and `observations` contexts are not implemented yet.
 
 ## Persistence and external integrations
 

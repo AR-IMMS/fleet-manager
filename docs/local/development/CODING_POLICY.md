@@ -27,7 +27,7 @@
 
 ## 3. Architecture and protocol guardrails
 
-- `transport/opamp` is the translation boundary; protobufs must not leak into core domain/application models.
+- `contexts/<owner>/delivery/opamp` is the protocol translation boundary; protobufs must not leak into domain/application models.
 - Check negotiated client/server capabilities before sending optional messages.
 - Treat connections as transient and identity as authenticated. An OpAMP `instance_uid` is an identifier, **not proof of identity**.
 - Maintain a clear status vocabulary: connected, reported healthy, delivery attempted, applied, failed, unknown, offline.

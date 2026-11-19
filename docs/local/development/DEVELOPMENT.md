@@ -7,6 +7,37 @@
 - Read the [accepted Fleet overview](../../shared/architecture/fleet-management/overview.md) and [C01–C04 index](../../shared/contracts/fleet-management/README.md). Proposed endpoints and schemas need owner approval before implementation.
 - Follow [Clean Architecture](../architecture/clean-architecture.md) and [quality gates](QUALITY_GATES.md).
 
+## Repository structure
+
+```text
+internal/
+├── app/                         # Composition root and aggregate app config API
+│   ├── config.go                # Config aliases and LoadConfig façade
+│   └── config_test.go
+├── contexts/
+│   └── identity/
+│       ├── domain/               # Authenticated principal and identity rules
+│       ├── application/          # Authentication use case and owned ports
+│       └── delivery/opamp/       # OpAMP adapter owned by identity/session context
+├── platform/
+│   ├── config/                   # Technical env-backed config parsing and defaults
+│   ├── env/                      # Reusable environment reader
+│   ├── logging/                  # Structured logger adapter
+│   └── mongodb/                  # MongoDB driver adapter
+└── shared/                       # Add only when a concrete shared mechanism is needed
+```
+
+Create context `infrastructure/` and additional `delivery/` packages only when an adapter exists. Current code has no `configuration` or `observations` implementation yet. Do not add empty packages.
+
+## Dependency rules
+
+- Dependencies point inward: domain has no application, adapter, app, platform or SDK imports; application may import only its own domain and minimal shared ports/mechanisms.
+- Contexts do not import another context's internal packages. Put consumer-owned ports in the consuming context and wire adapters at `app`.
+- Infrastructure and delivery implement inward ports. OpAMP delivery stays in the context that owns sessions/protocol; shared HTTP servers belong in platform only when genuinely shared.
+- Only `app` may assemble concrete contexts and platform adapters. `platform` and `shared` do not import `app` or contexts; no package imports `app`.
+- Aggregate runtime config is exposed at `app/config.go`; environment parsing and technical defaults live in `platform/config`, with reusable parsing in `platform/env`.
+- `.golangci.yml` Depguard rules enforce these package boundaries with concrete import prefixes. Verify a boundary rule with a temporary forbidden import when changing the rules.
+
 ## Commands
 
 ```bash
@@ -50,4 +81,4 @@ golangci-lint run ./...
 
 ## When adding feature
 
-Start with a focused use case and acceptance tests from the [shared roadmap](../../shared/integration/fleet-management/implementation-roadmap.md). Place protocol mapping in `transport/opamp`, HTTPS and persistence in adapters, domain rules within the relevant Fleet feature, and external integrations behind application ports. Add durable persistence for Fleet-owned state as each approved vertical slice requires it. Do not add empty packages for future roadmap items.
+Start with a focused use case and acceptance tests from the [shared roadmap](../../shared/integration/fleet-management/implementation-roadmap.md). Place protocol mapping in the owning context's `delivery/opamp`, HTTPS and persistence in context adapters, domain rules within the relevant Fleet feature, and external integrations behind consumer-owned ports. Add durable persistence for Fleet-owned state as each approved vertical slice requires it. Do not add empty packages for future roadmap items.

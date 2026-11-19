@@ -2,6 +2,222 @@ version: "2"
 
 linters:
   default: standard
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        identity-domain:
+          list-mode: strict
+          files:
+            - "**/internal/contexts/identity/domain/*.go"
+          allow:
+            - $gostd
+            - github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain
+          deny:
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/identity/application
+              desc: domain must not import application
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/identity/infrastructure
+              desc: domain must not import infrastructure
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/identity/delivery
+              desc: domain must not import delivery
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/configuration
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/observations
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/app
+              desc: domain must not import app
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/platform
+              desc: domain must not import platform
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/shared
+              desc: domain must not depend on shared implementation packages
+            - pkg: github.com/open-telemetry/opamp-go
+              desc: domain must not import protocol SDKs
+            - pkg: go.mongodb.org/mongo-driver
+              desc: domain must not import database drivers
+        identity-application:
+          list-mode: strict
+          files:
+            - "**/internal/contexts/identity/application/*.go"
+          allow:
+            - $gostd
+            - github.com/AR-IMMS/fleet-manager/internal/shared
+            - github.com/AR-IMMS/fleet-manager/internal/contexts/identity/application
+            - github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain
+          deny:
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/identity/infrastructure
+              desc: application must depend on ports, not infrastructure adapters
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/identity/delivery
+              desc: application must not import delivery adapters
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/configuration
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/observations
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/app
+              desc: application must not import composition wiring
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/platform
+              desc: application must not import platform adapters
+            - pkg: github.com/open-telemetry/opamp-go
+              desc: application must not import protocol SDKs
+            - pkg: go.mongodb.org/mongo-driver
+              desc: application must not import database drivers
+        identity-delivery:
+          list-mode: strict
+          files:
+            - "**/internal/contexts/identity/delivery/**/*.go"
+          allow:
+            - $gostd
+            - github.com/AR-IMMS/fleet-manager/internal/contexts/identity
+            - github.com/AR-IMMS/fleet-manager/internal/platform
+            - github.com/AR-IMMS/fleet-manager/internal/shared
+            - github.com/open-telemetry/opamp-go
+          deny:
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/configuration
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/observations
+              desc: contexts must not import another context
+        configuration-context:
+          list-mode: lax
+          files:
+            - "**/internal/contexts/configuration/**/*.go"
+          allow:
+            - github.com/AR-IMMS/fleet-manager/internal/contexts/configuration
+            - github.com/AR-IMMS/fleet-manager/internal/platform
+            - github.com/AR-IMMS/fleet-manager/internal/shared
+          deny:
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/identity
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/observations
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/app
+              desc: contexts must not import app
+        configuration-domain:
+          list-mode: strict
+          files:
+            - "**/internal/contexts/configuration/domain/*.go"
+          allow:
+            - $gostd
+            - github.com/AR-IMMS/fleet-manager/internal/contexts/configuration/domain
+          deny:
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/configuration/application
+              desc: domain must not import application
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/configuration/infrastructure
+              desc: domain must not import infrastructure
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/configuration/delivery
+              desc: domain must not import delivery
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/identity
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/observations
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/app
+              desc: domain must not import app
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/platform
+              desc: domain must not import platform
+        configuration-application:
+          list-mode: strict
+          files:
+            - "**/internal/contexts/configuration/application/*.go"
+          allow:
+            - $gostd
+            - github.com/AR-IMMS/fleet-manager/internal/shared
+            - github.com/AR-IMMS/fleet-manager/internal/contexts/configuration/application
+            - github.com/AR-IMMS/fleet-manager/internal/contexts/configuration/domain
+          deny:
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/configuration/infrastructure
+              desc: application must depend on ports, not adapters
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/configuration/delivery
+              desc: application must not import delivery
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/identity
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/observations
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/app
+              desc: application must not import app
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/platform
+              desc: application must not import platform
+        observations-context:
+          list-mode: lax
+          files:
+            - "**/internal/contexts/observations/**/*.go"
+          allow:
+            - github.com/AR-IMMS/fleet-manager/internal/contexts/observations
+            - github.com/AR-IMMS/fleet-manager/internal/platform
+            - github.com/AR-IMMS/fleet-manager/internal/shared
+          deny:
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/identity
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/configuration
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/app
+              desc: contexts must not import app
+        observations-domain:
+          list-mode: strict
+          files:
+            - "**/internal/contexts/observations/domain/*.go"
+          allow:
+            - $gostd
+            - github.com/AR-IMMS/fleet-manager/internal/contexts/observations/domain
+          deny:
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/observations/application
+              desc: domain must not import application
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/observations/infrastructure
+              desc: domain must not import infrastructure
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/observations/delivery
+              desc: domain must not import delivery
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/identity
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/configuration
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/app
+              desc: domain must not import app
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/platform
+              desc: domain must not import platform
+        observations-application:
+          list-mode: strict
+          files:
+            - "**/internal/contexts/observations/application/*.go"
+          allow:
+            - $gostd
+            - github.com/AR-IMMS/fleet-manager/internal/shared
+            - github.com/AR-IMMS/fleet-manager/internal/contexts/observations/application
+            - github.com/AR-IMMS/fleet-manager/internal/contexts/observations/domain
+          deny:
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/observations/infrastructure
+              desc: application must depend on ports, not adapters
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/observations/delivery
+              desc: application must not import delivery
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/identity
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/configuration
+              desc: contexts must not import another context
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/app
+              desc: application must not import app
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/platform
+              desc: application must not import platform
+        platform:
+          list-mode: strict
+          files:
+            - "**/internal/platform/**/*.go"
+          allow:
+            - $gostd
+            - github.com/AR-IMMS/fleet-manager/internal/platform
+            - go.mongodb.org/mongo-driver
+          deny:
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/app
+              desc: platform must not import app
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts
+              desc: platform must not import contexts
+        app-config:
+          list-mode: strict
+          files:
+            - "**/internal/app/*.go"
+          allow:
+            - $gostd
+            - github.com/AR-IMMS/fleet-manager/internal/contexts
+            - github.com/AR-IMMS/fleet-manager/internal/platform
+          deny:
+            - pkg: github.com/AR-IMMS/fleet-manager/internal/app
+              desc: app/config must not import app parent packages
 
 formatters:
   enable:

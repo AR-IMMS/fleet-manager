@@ -18,6 +18,18 @@ Fleet receives authorized management requests from Core, Agent enrollment and ob
 
 The code currently provides runtime configuration validation, a principal/authentication use case, and an OpAMP connection callback adapter with focused tests. It does **not** yet provide a running Fleet server, durable database, enrollment exchange, Core management API, session registry, configuration publication, observation ingestion, or production interoperability. See the [implementation roadmap](docs/shared/integration/fleet-management/implementation-roadmap.md) for target checkpoints and decision gates.
 
+## Repository structure
+
+| Path | Responsibility |
+|---|---|
+| `internal/app` | Composition root; currently exposes the aggregate config façade |
+| `internal/contexts/identity` | Principal and authentication use case, plus its OpAMP delivery adapter |
+| `internal/platform/config` and `internal/platform/env` | Runtime config parsing/defaults and reusable environment loading |
+| `internal/platform/logging` and `internal/platform/mongodb` | Technical adapters |
+| `internal/shared` | Reserved for concrete cross-context mechanisms; no package until needed |
+
+Domain and application dependencies point inward. Contexts remain isolated and communicate through consumer-owned ports wired by `app`. `platform` and `shared` do not depend on application contexts or `app`. Depguard enforces these import boundaries in `.golangci.yml`; see the [development guide](docs/local/development/DEVELOPMENT.md) before adding packages.
+
 ## Read first
 
 1. [Shared Fleet contract index](docs/shared/contracts/fleet-management/README.md) and [accepted architecture overview](docs/shared/architecture/fleet-management/overview.md) — cross-system source of truth.

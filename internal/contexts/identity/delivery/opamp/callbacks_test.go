@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AR-IMMS/fleet-manager/internal/identity/application"
-	"github.com/AR-IMMS/fleet-manager/internal/identity/domain"
+	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/application"
+	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain"
 )
 
 // verifierFunc supplies isolated authentication behavior for each test.
