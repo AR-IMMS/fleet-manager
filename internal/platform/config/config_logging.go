@@ -2,8 +2,9 @@ package config
 
 import (
 	"fmt"
-	"github.com/AR-IMMS/fleet-manager/internal/platform/env"
 	"strings"
+
+	"github.com/AR-IMMS/fleet-manager/internal/platform/env"
 )
 
 // LoggingConfig contains environment-controlled application logging settings.

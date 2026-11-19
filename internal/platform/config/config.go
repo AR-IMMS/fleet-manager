@@ -2,11 +2,12 @@ package config
 
 import (
 	"fmt"
-	"github.com/AR-IMMS/fleet-manager/internal/platform/env"
 	"net"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/AR-IMMS/fleet-manager/internal/platform/env"
 )
 
 // Config contains runtime settings.
@@ -26,6 +27,7 @@ type Config struct {
 	ShutdownTimeout time.Duration `json:"shutdown_timeout" yaml:"shutdown_timeout"`
 	Mongo           MongoConfig   `json:"-" yaml:"-"`
 	Logging         LoggingConfig `json:"-" yaml:"-"`
+	HTTP            HTTPConfig    `json:"http" yaml:"http"`
 }
 
 // LookupEnv is the environment lookup accepted by the configuration loader.
@@ -75,7 +77,7 @@ func LoadConfig(lookup env.LookupEnv) (Config, error) {
 	}
 
 	cfg.ShutdownTimeout, err = env.Duration(
-		"OPAMP_SHUTDOWN_TIMEOUT", "10s",
+		"FLEET_SHUTDOWN_TIMEOUT", "10s",
 	)
 	if err != nil {
 		return Config{}, err
@@ -94,6 +96,11 @@ func LoadConfig(lookup env.LookupEnv) (Config, error) {
 	}
 
 	cfg.Logging, err = loadLoggingConfig(env)
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg.HTTP, err = loadHTTPConfig(env)
 	if err != nil {
 		return Config{}, err
 	}
@@ -156,6 +163,10 @@ func (c Config) Validate() error {
 	}
 
 	if err := c.Mongo.Validate(); err != nil {
+		return err
+	}
+
+	if err := c.Logging.Validate(); err != nil {
 		return err
 	}
 

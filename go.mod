@@ -3,6 +3,7 @@ module github.com/AR-IMMS/fleet-manager
 go 1.25.5
 
 require (
+	github.com/go-chi/chi/v5 v5.5.0
 	github.com/open-telemetry/opamp-go v0.25.1-0.20261009224415-75f79590b7a6
 	go.mongodb.org/mongo-driver/v2 v2.10.0
 )

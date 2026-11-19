@@ -210,14 +210,23 @@ linters:
         app-config:
           list-mode: strict
           files:
-            - "**/internal/app/*.go"
+            - "**/internal/app/config/*.go"
           allow:
             - $gostd
-            - github.com/AR-IMMS/fleet-manager/internal/contexts
             - github.com/AR-IMMS/fleet-manager/internal/platform
           deny:
             - pkg: github.com/AR-IMMS/fleet-manager/internal/app
               desc: app/config must not import app parent packages
+
+        app-wiring:
+          list-mode: strict
+          files:
+            - "**/internal/app/*.go"
+          allow:
+            - $gostd
+            - github.com/go-chi/chi/v5
+            - github.com/AR-IMMS/fleet-manager/internal/contexts
+            - github.com/AR-IMMS/fleet-manager/internal/platform
 
 formatters:
   enable:

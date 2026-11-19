@@ -13,7 +13,9 @@
 internal/
 ├── app/                         # Composition root and aggregate app config API
 │   ├── config.go                # Config aliases and LoadConfig façade
-│   └── config_test.go
+│   ├── application.go           # Startup, cancellation and shutdown orchestration
+│   ├── wiring.go                # Concrete platform adapter assembly
+│   └── router.go                # Application-owned HTTP route wiring
 ├── contexts/
 │   └── identity/
 │       ├── domain/               # Authenticated principal and identity rules
@@ -22,6 +24,7 @@ internal/
 ├── platform/
 │   ├── config/                   # Technical env-backed config parsing and defaults
 │   ├── env/                      # Reusable environment reader
+│   ├── http-server/              # Shared listener, health response and shutdown adapter
 │   ├── logging/                  # Structured logger adapter
 │   └── mongodb/                  # MongoDB driver adapter
 └── shared/                       # Add only when a concrete shared mechanism is needed
