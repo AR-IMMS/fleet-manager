@@ -1,0 +1,22 @@
+pre-commit:
+  jobs:
+    - name: go-format
+      glob: "*.go"
+      run: golangci-lint fmt --diff
+    - name: go-lint
+      glob: "*.go"
+      run: golangci-lint run ./...
+
+commit-msg:
+  jobs:
+    - name: conventional-commit
+      run: go run ./scripts/check-commit-message.go {1}
+
+pre-push:
+  jobs:
+    - name: vet
+      run: go vet ./...
+    - name: tidy
+      run: go mod tidy -diff
+    - name: race-tests
+      run: go test -race ./...
