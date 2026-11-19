@@ -201,6 +201,8 @@ linters:
           allow:
             - $gostd
             - github.com/AR-IMMS/fleet-manager/internal/platform
+            - github.com/go-playground/validator/v10
+            - github.com/google/uuid
             - go.mongodb.org/mongo-driver
           deny:
             - pkg: github.com/AR-IMMS/fleet-manager/internal/app
