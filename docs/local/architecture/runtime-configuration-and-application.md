@@ -114,4 +114,4 @@ The lifecycle registry is local to each `Run`; it is not a field on `Application
 
 ## Not implemented yet
 
-The [OpAMP server component](opamp-server.md) now implements `Start()` / `Stop(ctx)` and authenticated callbacks, but is not wired into `Application.Run`: a production identity verifier is still required. There is no `BackgroundWorker` interface or full Fleet API wiring. Keep config defaults in their owning configuration sections and reusable environment parsing in `platform/env`.
+The [OpAMP server component](opamp-server.md) now implements `Start()` / `Stop(ctx)` and authenticated callbacks. Mongo-backed credential verification and UID binding are constructed by `Application.Run`, but the OpAMP listener remains inactive until credential provisioning/revocation authorization, C01/C04 decisions, and pinned Supervisor integration are satisfied. There is no `BackgroundWorker` interface or full Fleet API wiring. Keep config defaults in their owning configuration sections and reusable environment parsing in `platform/env`.

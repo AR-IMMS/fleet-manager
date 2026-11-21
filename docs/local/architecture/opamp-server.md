@@ -1,9 +1,10 @@
 # OpAMP server
 
 **Status:** implemented and tested server component; not activated by `Application.Run`.
-The existing runtime still starts MongoDB and HTTP health routes only.
-Production activation requires an approved Fleet `IdentityVerifier` implementation.
-No permissive verifier or test credential source is installed in application wiring.
+The runtime starts MongoDB and HTTP health routes and constructs the Mongo-backed identity
+verifier plus bounded authenticator. It still does not start the OpAMP listener. Production
+activation remains gated on credential provisioning/revocation authorization, C01/C04 security
+decisions, and pinned Supervisor integration evidence.
 
 ## Responsibilities and files
 
@@ -14,6 +15,7 @@ No permissive verifier or test credential source is installed in application wir
 | `CallbackAdapter` | `contexts/identity/delivery/opamp/callbacks.go` | Authentication callbacks and native protocol translation |
 | Connection tracking | `contexts/identity/delivery/opamp/connections.go` | Socket cleanup and callback lifetime cancellation |
 | `Authenticator` | `contexts/identity/application/authentication.go` | Bounded credential verification through `IdentityVerifier` |
+| Mongo verifier and UID binding | `contexts/identity/infrastructure/mongodb/verifier.go` | Hash-only credential lookup, atomic UID binding, reconnect checks, revocation fence |
 
 Paths above are relative to `internal/`. `CallbackAdapter` replaces the former `Handler` name.
 `ConnectionAuthenticator` is a delivery-owned interface implemented by the existing authenticator.
@@ -37,8 +39,11 @@ are rejected by the wrapper. `Addr()` exposes the bound address for diagnostics/
 1. The adapter authenticates the bearer credential before admitting a connection.
 2. Rejected credentials return 401; unavailable or timed-out verification returns 503.
 3. Connection callbacks capture the authenticated principal independently.
-4. Messages must contain a 16-byte UID. This is structural validation, not UID ownership binding.
-5. The bootstrap response echoes the UID and advertises no server capabilities.
+4. Messages must contain a 16-byte UID and pass the Mongo session authorizer. The first message
+   binds the UID; reconnects must present the same UID. Conflicting UIDs reject and close.
+5. Every message rechecks active credential status and stored UID. Revocation blocks the next
+   callback; no separate active-session registry currently closes sockets asynchronously.
+6. The bootstrap response echoes the authorized UID and advertises no server capabilities.
 
 The SDK owns native protobuf framing. Message size uses `OPAMP_MAX_MESSAGE_BYTES`.
 Malformed protocol diagnostics are redacted; raw parser errors, payloads, and credentials
@@ -92,6 +97,7 @@ direction TB
     }
     class CallbackAdapter {
         -ConnectionAuthenticator authenticator
+        -SessionAuthorizer authorizer
         +Callbacks() SDKCallbacks
         -onConnecting(request) ConnectionResponse
         -connectionCallbacks(principal) ConnectionCallbacks
@@ -108,26 +114,27 @@ direction TB
         <<future extension>>
         +Handle(ctx, principal, input) (result, error)
     }
-    Application ..> OpAMPServer : activation pending verifier
+    Application ..> OpAMPServer : activation pending security/integration gates
     OpAMPServer --> OpAMPConfig
     OpAMPServer --> OpAMPServerSDK : wraps
     OpAMPServer --> CallbackAdapter : registers callbacks
     OpAMPServerSDK ..> CallbackAdapter : invokes
     CallbackAdapter --> ConnectionAuthenticator
     Authenticator ..|> ConnectionAuthenticator
+    CallbackAdapter --> SessionAuthorizer
     CallbackAdapter ..> MessageHandler : future normalized delegation
 ```
 
 ## Activation and OPEN decisions
 
-Once the verifier is approved, app wiring constructs the authenticator, adapter, and server;
-starts the listener; and immediately registers `server.Stop` in the existing lifecycle registry.
-Drain before cleanup, and stop the listener before its persistence dependencies.
-
-UID binding, duplicate-session ownership, active-session revocation, configuration publication,
-push/reconciliation, and message use cases remain OPEN under
+The verifier and authenticator are constructed by app wiring, but the listener, adapter, and
+server remain inactive. See [identity verification and Supervisor UID binding](identity-verification-and-supervisor-binding.md)
+for first-bind, reconnect, conflict, revocation, recovery limits, and test status. Credential
+provisioning/rotation and cross-system policy remain OPEN under
+[C01](../../shared/contracts/fleet-management/enrollment-identity-v1.md) and
 [C04](../../shared/contracts/fleet-management/opamp-integration-v1.md).
 `MessageHandler` is not implemented without an approved use case and application-owned DTOs.
 Native SDK client tests cover WS/WSS, auth rejection/timeout, reconnect, malformed/oversized
-messages, and shutdown. These do not establish interoperability with the pinned official
-Supervisor; that remains a release gate. No shared contract or gitlink was changed.
+messages, and shutdown. The pinned Supervisor v0.160.0 UID-continuity and Fleet/Mongo binding
+tests also passed locally on Windows; hosted Ubuntu and Windows CI results remain pending.
+No production listener is started.
