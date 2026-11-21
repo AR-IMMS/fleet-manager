@@ -1,10 +1,14 @@
 # OpAMP server
 
-**Status:** implemented and tested server component; not activated by `Application.Run`.
-The runtime starts MongoDB and HTTP health routes and constructs the Mongo-backed identity
-verifier plus bounded authenticator. It still does not start the OpAMP listener. Production
-activation remains gated on credential provisioning/revocation authorization, C01/C04 security
-decisions, and pinned Supervisor integration evidence.
+**Status:** wired into `Application.Run`, opt-in, and covered by a Mongo plus pinned Supervisor
+application integration test. `OPAMP_ENABLED` defaults to `false`; enabling it starts the
+listener only after Mongo identity storage, the authenticator, and mandatory callbacks are
+constructed. Credentials remain required for every connection and UID binding.
+
+Production deployments should leave the listener disabled until credential provisioning and
+revocation authorization are available and the remaining C01/C04 security decisions are
+approved. Non-loopback listener configuration requires TLS, and authentication remains
+fail-closed when the listener is enabled.
 
 ## Responsibilities and files
 
@@ -33,6 +37,9 @@ requires TLS 1.2 or later when TLS is configured, binds synchronously, and start
 Plaintext remains allowed only on an explicit loopback address. The listener accepts
 WebSocket upgrades; plain HTTP protocol requests receive 426. Wildcard route patterns
 are rejected by the wrapper. `Addr()` exposes the bound address for diagnostics/tests.
+`Application.Run` constructs the callback adapter from the Mongo verifier and bounded
+authenticator, starts OpAMP when `OPAMP_ENABLED=true`, then includes the bound listener in
+readiness. The lifecycle stops HTTP, OpAMP, then Mongo in reverse acquisition order.
 
 ## Connection behavior
 
@@ -67,8 +74,10 @@ connection close or server stop. Technical handshake and response-write deadline
 10 seconds; successful upgrades clear the handshake deadline. SDK writes otherwise ignore
 context cancellation, so the write deadline and explicit socket closure are necessary.
 
-The SDK does not expose an asynchronous serving-error channel. Such failures are logged;
-this wrapper does not claim the HTTP server's `Errors()` monitoring behavior.
+The SDK does not expose an asynchronous serving-error channel. The wrapper reports fatal
+listener `Accept` errors to `Application.Run` and marks OpAMP readiness unavailable; normal
+shutdown closure is not treated as a runtime failure. Other SDK-internal serving failures
+that do not reach the listener remain outside the wrapper's monitoring surface.
 
 ## Class diagram
 
@@ -114,7 +123,7 @@ direction TB
         <<future extension>>
         +Handle(ctx, principal, input) (result, error)
     }
-    Application ..> OpAMPServer : activation pending security/integration gates
+    Application ..> OpAMPServer : starts when OPAMP_ENABLED=true
     OpAMPServer --> OpAMPConfig
     OpAMPServer --> OpAMPServerSDK : wraps
     OpAMPServer --> CallbackAdapter : registers callbacks
@@ -127,14 +136,17 @@ direction TB
 
 ## Activation and OPEN decisions
 
-The verifier and authenticator are constructed by app wiring, but the listener, adapter, and
-server remain inactive. See [identity verification and Supervisor UID binding](identity-verification-and-supervisor-binding.md)
+OpAMP wiring is implemented behind the default-disabled `OPAMP_ENABLED` setting. Startup
+registers listener cleanup only after successful bind; readiness requires Mongo connectivity
+and a bound OpAMP listener when enabled. Shutdown marks readiness draining, then stops HTTP,
+OpAMP and Mongo. See [identity verification and Supervisor UID binding](identity-verification-and-supervisor-binding.md)
 for first-bind, reconnect, conflict, revocation, recovery limits, and test status. Credential
 provisioning/rotation and cross-system policy remain OPEN under
 [C01](../../shared/contracts/fleet-management/enrollment-identity-v1.md) and
 [C04](../../shared/contracts/fleet-management/opamp-integration-v1.md).
 `MessageHandler` is not implemented without an approved use case and application-owned DTOs.
 Native SDK client tests cover WS/WSS, auth rejection/timeout, reconnect, malformed/oversized
-messages, and shutdown. The pinned Supervisor v0.160.0 UID-continuity and Fleet/Mongo binding
-tests also passed locally on Windows; hosted Ubuntu and Windows CI results remain pending.
-No production listener is started.
+messages, and shutdown. Hosted pinned Supervisor v0.160.0 UID-continuity and Fleet/Mongo
+binding checks passed on Ubuntu and Windows where applicable. The new Application.Run plus
+Mongo/Supervisor test is queued for the next PR CI run. The application listener remains
+disabled unless explicitly enabled in runtime configuration.

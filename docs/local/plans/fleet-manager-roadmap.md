@@ -30,7 +30,7 @@ This proves tested Agent behavior with a fixture and real pinned Supervisor/Coll
 
 | ID | Checkpoint | Dependency | Status |
 |---|---|---|---|
-| FM-01 | Service foundation | Existing repository assessment | PLANNED |
+| FM-01 | Service foundation | Existing repository assessment | IN PROGRESS |
 | FM-02 | Service authentication and authorization | FM-01; approved security profile | PLANNED |
 | FM-03 | Enrollment and Agent registry | FM-02; enrollment contract | PLANNED |
 | FM-04 | Native OpAMP session management | FM-03; UID/session profile | PLANNED |
@@ -41,14 +41,16 @@ This proves tested Agent behavior with a fixture and real pinned Supervisor/Coll
 
 ## FM-01 — Service foundation
 
-- [ ] Assess existing code, tests, local instructions and documentation; identify obsolete adapter-only assumptions.
+- [x] Assess existing code, tests, local instructions and documentation; identify obsolete adapter-only assumptions.
 - [ ] Establish fleet-manager entrypoint, application composition and validated configuration.
-- [ ] Compose HTTP and native OpAMP listeners with explicit TLS/termination policy, limits and graceful shutdown.
+- [x] Compose HTTP and native OpAMP listeners with explicit TLS/termination policy, limits and graceful shutdown. OpAMP is disabled unless `OPAMP_ENABLED=true`.
 - [ ] Add Fleet-owned MongoDB connection, migrations/indexes and documented deployment-topology requirements.
-- [ ] Add structured secret-safe logs, request correlation, liveness and readiness.
-- [ ] Establish formatting, architecture checks, tests, vet/build and CI.
+- [x] Add structured secret-safe logs, request correlation, liveness and readiness, including optional OpAMP readiness.
+- [x] Establish formatting, architecture checks, tests, vet/build and CI.
 
 Acceptance: service starts with valid settings, rejects invalid settings, reports dependency readiness correctly and shuts down without leaking listeners/workers. Persistence is confined to the Fleet database. Transaction-dependent behavior is tested against a supported MongoDB topology.
+
+**Current acceptance note:** Application-level OpAMP startup, Mongo readiness, authenticated Supervisor UID binding, shutdown, and listener-bind failure cleanup are covered by the Mongo plus pinned Supervisor integration test. FM-01 remains IN PROGRESS: the repository still has no service command entrypoint, and Mongo migration/deployment-topology requirements are not complete. OpAMP remains disabled by default while credential provisioning/revocation authorization and C01/C04 security decisions remain open.
 
 ## FM-02 — Service authentication and authorization
 

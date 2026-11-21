@@ -15,9 +15,9 @@ Configuration loading validates the settings before application construction. `N
 
 ## Startup and shutdown today
 
-`Application.Run` is single-use. It creates a local lifecycle registry and calls `wireRuntime`. Wiring opens MongoDB, registers its close operation, creates a readiness checker backed by Mongo ping, builds the health router, then starts the HTTP server. On every exit path, the application marks readiness as draining and calls registered cleanup steps in reverse acquisition order under one bounded shutdown context.
+`Application.Run` is single-use. It creates a local lifecycle registry and calls `wireRuntime`. Wiring opens MongoDB, creates the Mongo credential verifier and bounded authenticator, and starts the native OpAMP listener only when `OPAMP_ENABLED=true`. The mandatory callback adapter receives the verifier for credential checks and per-message UID binding. Wiring then creates readiness checks, builds the health router, and starts HTTP. On every exit path, readiness enters drain before cleanup runs in reverse acquisition order under one bounded shutdown context.
 
-The running HTTP routes are `/health/live` and `/health/ready`. Readiness returns a generic unavailable response if Mongo is unhealthy or shutdown has begun. The application currently waits for context cancellation or an unexpected HTTP serving error. It does not yet start an OpAMP listener or background worker.
+The running HTTP routes are `/health/live` and `/health/ready`. Readiness returns a generic unavailable response if Mongo is unhealthy, enabled OpAMP has not bound or its listener has failed, or shutdown has begun. The application waits for context cancellation, an HTTP serving error, or an unexpected OpAMP listener failure. The SDK does not expose a serving-error channel, so the wrapper observes fatal listener `Accept` errors.
 
 ## Class diagram
 
@@ -34,6 +34,7 @@ direction TB
         +Validate() error
     }
     class OpAMPConfig {
+        +bool Enabled
         +string ListenAddress
         +string OpAMPPath
         +string TLSCertFile
@@ -64,10 +65,28 @@ direction TB
     class runtimeState {
         -FleetReadiness readiness
         -HTTPServer http
+        -OpAMPServer opamp (optional)
+        -Authenticator authenticator
+        -MongoVerifier identityStore
     }
     class HTTPServer {
         +Start(ctx) error
         +Shutdown(ctx) error
+    }
+    class OpAMPServer {
+        +Start() error
+        +Stop(ctx) error
+        +Addr() net.Addr
+    }
+    class CallbackAdapter {
+        +Callbacks() SDKCallbacks
+    }
+    class Authenticator {
+        +Authenticate(ctx, credential) (Principal, error)
+    }
+    class MongoVerifier {
+        +Verify(ctx, credential) (Principal, error)
+        +BindAndAuthorize(ctx, principal, uid) error
     }
     class Router {
         +GET /health/live
@@ -99,19 +118,24 @@ direction TB
     Application ..> runtimeState : builds through wireRuntime
     runtimeState *-- FleetReadiness
     runtimeState *-- HTTPServer
+    runtimeState o-- OpAMPServer : when OPAMP_ENABLED=true
+    OpAMPServer --> CallbackAdapter
+    CallbackAdapter --> Authenticator : authenticates
+    CallbackAdapter --> MongoVerifier : binds and checks each UID
     HTTPServer --> Router : serves
     Router *-- HealthHandler
     HealthHandler --> ReadinessChecker
     FleetReadiness ..|> ReadinessChecker
     FleetReadiness --> MongoDatabase : checks ping
-    lifecycle o-- MongoDatabase : closes after HTTP server
+    lifecycle o-- MongoDatabase : closes last
+    lifecycle o-- OpAMPServer : stops after HTTP
     lifecycle o-- HTTPServer : shuts down first
 ```
 
 ## Reading the diagram
 
-The lifecycle registry is local to each `Run`; it is not a field on `Application`. MongoDB and the HTTP server are acquired in that order, so reverse cleanup shuts HTTP down before MongoDB. The app layer owns this sequencing; platform packages do not import `app`.
+The lifecycle registry is local to each `Run`; it is not a field on `Application`. When enabled, acquisition order is MongoDB, OpAMP, then HTTP. Reverse cleanup shuts HTTP down first, then OpAMP, then MongoDB. OpAMP defaults to disabled, and an enabled listener still requires authenticated credentials and binds UID only after verification.
 
 ## Not implemented yet
 
-The [OpAMP server component](opamp-server.md) now implements `Start()` / `Stop(ctx)` and authenticated callbacks. Mongo-backed credential verification and UID binding are constructed by `Application.Run`, but the OpAMP listener remains inactive until credential provisioning/revocation authorization, C01/C04 decisions, and pinned Supervisor integration are satisfied. There is no `BackgroundWorker` interface or full Fleet API wiring. Keep config defaults in their owning configuration sections and reusable environment parsing in `platform/env`.
+The [OpAMP server component](opamp-server.md) is wired into `Application.Run` behind `OPAMP_ENABLED`, which defaults to `false`. Real Supervisor plus Mongo tests exercise startup, readiness, authenticated UID binding, shutdown, and listener-bind failure cleanup through the application. There is no service command entrypoint, credential provisioning/revocation API, or full Fleet API wiring; production OpAMP should remain disabled until those security prerequisites and remaining C01/C04 decisions are resolved. Keep config defaults in their owning configuration sections and reusable environment parsing in `platform/env`.

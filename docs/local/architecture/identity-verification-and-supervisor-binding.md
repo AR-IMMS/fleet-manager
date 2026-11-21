@@ -1,6 +1,6 @@
 # Identity verification and Supervisor UID binding
 
-**Implementation status:** Mongo-backed verification and guarded UID binding are implemented. OpAMP is still not activated by `Application.Run`. The exact credential wire contract remains unapproved. Official Supervisor v0.160.0 UID continuity and Mongo binding both passed locally on Windows; hosted Ubuntu and Windows CI results are pending.
+**Implementation status:** Mongo-backed verification, guarded UID binding, and application composition are implemented. OpAMP starts only when `OPAMP_ENABLED=true` and defaults to disabled. The exact credential wire contract remains unapproved. Hosted Ubuntu/Windows UID continuity and Mongo binding checks passed; the new Application.Run plus Mongo/Supervisor acceptance check awaits its hosted run.
 
 ## Ownership and identifiers
 
@@ -57,7 +57,8 @@ direction TB
         +instance_uid optional hex
     }
 
-    Application --> MongoVerifier : constructs, listener remains disabled
+    Application --> MongoVerifier : constructs
+    Application --> CallbackAdapter : starts only when OPAMP_ENABLED=true
     MongoVerifier ..|> IdentityVerifier
     MongoVerifier ..|> SessionAuthorizer
     MongoVerifier --> IdentityInstallationRecord : atomic conditional update
@@ -68,7 +69,7 @@ direction TB
     IdentityVerifier --> Principal : returns verified agent and credential IDs
 ```
 
-The credential token is hashed with SHA-256 before storage. This implementation assumes a high-entropy token of at least 32 bytes; the enrollment flow must generate it randomly and return it only to its authorized recipient. Raw tokens are not written to MongoDB or logs. The adapter creates unique indexes for credential hash, credential ID, `agent_id`, and non-empty Supervisor UID. Expiration is not represented or checked yet: an active record remains valid until explicitly revoked. This is a deliberate limit while C01 expiry/rotation rules are OPEN, and another reason the listener remains inactive.
+The credential token is hashed with SHA-256 before storage. This implementation assumes a high-entropy token of at least 32 bytes; the enrollment flow must generate it randomly and return it only to its authorized recipient. Raw tokens are not written to MongoDB or logs. The adapter creates unique indexes for credential hash, credential ID, `agent_id`, and non-empty Supervisor UID. Expiration is not represented or checked yet: an active record remains valid until explicitly revoked. This is a deliberate limit while C01 expiry/rotation rules are OPEN and a reason production deployments should leave the default-disabled listener off.
 
 ### Binding and reconnect behavior
 
@@ -94,8 +95,8 @@ Mongo identity record writes and unique indexes do not depend on multi-document 
 
 - Unit tests cover authenticated principal shape, invalid UID rejection, per-message authorization, disconnect on revocation, and error classification.
 - The Mongo integration test (`go test -tags=integration ./internal/contexts/identity/infrastructure/mongodb`) covers first bind, same-UID reconnect, changed UID conflict, cross-installation UID conflict, concurrent bind/revoke, revoked credential rejection, and token redaction in storage. It skips unless `FLEET_MONGODB_URI` or `MONGODB_URI` is set; a skipped run is not persistence evidence.
-- **Pinned Supervisor UID continuity test: IMPLEMENTED.** `.github/workflows/supervisor-identity.yml` has a separate `uid-continuity` job on Ubuntu and Windows. It downloads the official `cmd/opampsupervisor/v0.160.0` binary, verifies its published SHA-256 sidecar and module build information, and runs `go test -tags=supervisor ./tests/supervisor`. The test starts the real binary against a local Fleet OpAMP server, records the 16-byte UID from authenticated messages, restarts with the same `storage.directory`, and asserts equality; it then starts with a fresh directory and asserts a different UID. A local Windows run passed. Hosted Ubuntu and Windows job results remain pending. Cleanup stops Supervisor and its test Collector child and removes temporary files; failures save redacted Supervisor logs as a short-retention CI artifact.
-- **Fleet/Mongo binding test: IMPLEMENTED.** A separate Ubuntu job starts MongoDB and runs `go test -tags=supervisor,integration ./tests/supervisor`. It repeats first bind and retained-state reconnect against the Mongo-backed verifier, then confirms a fresh-state UID is rejected as a conflict and does not replace the original binding. The test passed locally on Windows against the running MongoDB container. Hosted Ubuntu results remain pending. This evidence is distinct from UID continuity and from the existing Mongo-only tests.
+- **Pinned Supervisor UID continuity test: IMPLEMENTED.** `.github/workflows/supervisor-identity.yml` has a separate `uid-continuity` job on Ubuntu and Windows. It downloads the official `cmd/opampsupervisor/v0.160.0` binary, verifies its published SHA-256 sidecar and module build information, and tests retained-state equality and fresh-state UID generation. Hosted Ubuntu and Windows checks passed. Cleanup stops Supervisor and its test Collector child and removes temporary files; failures save redacted Supervisor logs as a short-retention CI artifact.
+- **Fleet/Mongo binding test: IMPLEMENTED.** A separate Ubuntu job runs Mongo credential binding and revocation tests plus the official Supervisor reconnect/fresh-state conflict test. Hosted Ubuntu checks passed. The new application-wiring test also starts `Application.Run` against Mongo and the pinned Supervisor, verifies readiness and stored UID binding, then checks shutdown and startup-failure listener cleanup; its hosted result is pending.
 - These acceptance tests observe UID behavior; they do not approve a reset/rebind policy or prove production interoperability. Local execution requires the pinned Supervisor binary and the test Collector executable; Fleet/Mongo execution also requires `FLEET_MONGODB_URI`.
 - The existing native `opamp-go` client integration tests are adapter tests, not a pinned official Supervisor test.
 
