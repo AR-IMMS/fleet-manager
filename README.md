@@ -20,6 +20,8 @@ The code currently provides runtime configuration, an application lifecycle/comp
 
 ## Repository structure
 
+The [OpAMP server design](docs/local/architecture/opamp-server.md) describes the tested WS/WSS listener component and callback adapter. Runtime activation awaits a production identity verifier; `Application.Run` continues to serve HTTP health routes only.
+
 | Path | Responsibility |
 |---|---|
 | `internal/app` | Composition root, application lifecycle, HTTP route wiring, and aggregate config façade |

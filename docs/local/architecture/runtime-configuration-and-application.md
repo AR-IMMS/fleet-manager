@@ -6,6 +6,7 @@
 
 - `internal/platform/env` reads injected environment values and parses durations. It distinguishes absent settings (use the caller's default) from explicitly empty required settings (error). Optional settings become empty strings when absent or empty.
 - `internal/platform/config` owns the full runtime `Config`, environment names/defaults, and validation for HTTP, OpAMP, MongoDB, and logging settings.
+- `Config` embeds `OpAMPConfig`; existing flat JSON/YAML names and promoted Go field selectors are preserved.
 - `internal/app/config.go` provides aliases and `LoadConfig` as the application-facing facade. The configuration type itself currently lives in `platform/config`.
 - `internal/app` validates inputs, assembles runtime dependencies, coordinates startup and cleanup, and owns readiness state.
 - `internal/platform/mongodb` and `internal/platform/http-server` own the database and HTTP listener mechanics.
@@ -24,17 +25,21 @@ The running HTTP routes are `/health/live` and `/health/ready`. Readiness return
 classDiagram
 direction TB
     class Config {
+        +OpAMPConfig embedded
+        +HTTPConfig HTTP
+        +MongoConfig Mongo
+        +LoggingConfig Logging
+        +Duration ShutdownTimeout
+        +LoadConfig(lookup) (Config, error)
+        +Validate() error
+    }
+    class OpAMPConfig {
         +string ListenAddress
         +string OpAMPPath
         +string TLSCertFile
         +string TLSKeyFile
         +int64 MaxMessageBytes
         +Duration AuthTimeout
-        +HTTPConfig HTTP
-        +MongoConfig Mongo
-        +LoggingConfig Logging
-        +Duration ShutdownTimeout
-        +LoadConfig(lookup) (Config, error)
         +Validate() error
     }
     class envReader {
@@ -88,6 +93,7 @@ direction TB
         +Check(ctx) error
     }
     envReader ..> Config : supplies environment values
+    Config *-- OpAMPConfig : embeds
     Application --> Config : stores validated config
     Application ..> lifecycle : creates during Run
     Application ..> runtimeState : builds through wireRuntime
@@ -108,4 +114,4 @@ The lifecycle registry is local to each `Run`; it is not a field on `Application
 
 ## Not implemented yet
 
-There is no `BackgroundWorker` interface, OpAMP server lifecycle, or full Fleet API wiring in the current application bootstrap. Add those only with an owning feature and explicit startup, readiness, and shutdown behavior. Keep config defaults in their owning configuration sections; keep reusable environment parsing in `platform/env`.
+The [OpAMP server component](opamp-server.md) now implements `Start()` / `Stop(ctx)` and authenticated callbacks, but is not wired into `Application.Run`: a production identity verifier is still required. There is no `BackgroundWorker` interface or full Fleet API wiring. Keep config defaults in their owning configuration sections and reusable environment parsing in `platform/env`.

@@ -117,7 +117,7 @@ func TestConnectingAuthentication(t *testing.T) {
 			}
 
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-			handler, err := NewHandler(authenticator, logger)
+			handler, err := NewCallbackAdapter(authenticator, logger)
 			if err != nil {
 				t.Fatal(err)
 			}

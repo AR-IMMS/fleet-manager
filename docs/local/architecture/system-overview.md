@@ -43,4 +43,4 @@ Keep legacy Agent-managed Collector, current Core-backed Supervisor mode, and fu
 
 ## Current repository state
 
-The repository has config validation, an authentication use case and an OpAMP callback adapter with tests. It has no running Fleet service, durable store, enrollment flow, Core API, configuration publication or observation projection. This document describes the target, not current feature availability.
+The repository has configuration, MongoDB connectivity, application lifecycle, HTTP health/readiness, and an authentication use case. The [OpAMP listener and callback adapter](opamp-server.md) are tested components; activation in application wiring awaits a production identity verifier. There is no service entrypoint, durable Fleet record model, enrollment flow, Core API, configuration publication, or observation projection. The ownership sections above describe the target.
