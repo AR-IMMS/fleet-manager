@@ -47,7 +47,7 @@ func NewApplication(
 //
 // Runtime cancellation is a normal shutdown request. Startup and cleanup
 // failures are returned to the entrypoint. HTTP health routes and identity
-// persistence are initialized here; OpAMP activation remains separately gated.
+// persistence are initialized here; OpAMP starts only when explicitly enabled.
 func (a *Application) Run(ctx context.Context) (runErr error) {
 	if !a.started.CompareAndSwap(false, true) {
 		return ErrAlreadyRun
@@ -102,5 +102,19 @@ func (a *Application) Run(ctx context.Context) (runErr error) {
 		}
 
 		return fmt.Errorf("http server failed: %w", err)
+
+	case err, ok := <-opampErrors(runtime):
+		if !ok || err == nil {
+			return fmt.Errorf("OpAMP server exited unexpectedly")
+		}
+
+		return fmt.Errorf("OpAMP server failed: %w", err)
 	}
+}
+
+func opampErrors(runtime *runtimeState) <-chan error {
+	if runtime == nil || runtime.opamp == nil {
+		return nil
+	}
+	return runtime.opamp.Errors()
 }

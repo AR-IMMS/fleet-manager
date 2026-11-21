@@ -12,6 +12,7 @@ import (
 
 // OpAMPConfig contains protocol listener settings; environment names and wire fields are preserved.
 type OpAMPConfig struct {
+	Enabled         bool          `json:"enabled" yaml:"enabled"`
 	ListenAddress   string        `json:"listen_address" yaml:"listen_address"`
 	OpAMPPath       string        `json:"opamp_path" yaml:"opamp_path"`
 	TLSCertFile     string        `json:"tls_cert_file" yaml:"tls_cert_file"`
@@ -23,6 +24,15 @@ type OpAMPConfig struct {
 func loadOpAMPConfig(reader env.Reader) (OpAMPConfig, error) {
 	var cfg OpAMPConfig
 	var err error
+	enabled, err := reader.Setting("OPAMP_ENABLED", "false")
+	if err != nil {
+		return OpAMPConfig{}, err
+	}
+	cfg.Enabled, err = strconv.ParseBool(enabled)
+	if err != nil {
+		return OpAMPConfig{}, fmt.Errorf("OPAMP_ENABLED must be a boolean")
+	}
+
 	cfg.ListenAddress, err = reader.Setting(
 		"OPAMP_LISTEN_ADDRESS", "127.0.0.1:4320",
 	)

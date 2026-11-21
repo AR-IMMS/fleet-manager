@@ -2,6 +2,7 @@ package opamp
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"sync"
@@ -18,16 +19,30 @@ type connectionListener struct {
 	net.Listener
 	mu          sync.Mutex
 	closed      bool
+	failure     error
+	failures    chan error
 	connections map[*trackedConnection]struct{}
 }
 
 func newConnectionListener(listener net.Listener) *connectionListener {
-	return &connectionListener{Listener: listener, connections: make(map[*trackedConnection]struct{})}
+	return &connectionListener{
+		Listener:    listener,
+		failures:    make(chan error, 1),
+		connections: make(map[*trackedConnection]struct{}),
+	}
 }
 
 func (l *connectionListener) Accept() (net.Conn, error) {
 	conn, err := l.Listener.Accept()
 	if err != nil {
+		l.mu.Lock()
+		var temporary interface{ Temporary() bool }
+		isTemporary := errors.As(err, &temporary) && temporary.Temporary()
+		if !l.closed && !isTemporary && l.failure == nil {
+			l.failure = err
+			l.failures <- err
+		}
+		l.mu.Unlock()
 		return nil, err
 	}
 	l.mu.Lock()
@@ -46,6 +61,14 @@ func (l *connectionListener) Accept() (net.Conn, error) {
 	l.connections[tracked] = struct{}{}
 	return tracked, nil
 }
+
+func (l *connectionListener) Err() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.failure
+}
+
+func (l *connectionListener) Errors() <-chan error { return l.failures }
 
 func (l *connectionListener) closeConnections() {
 	l.mu.Lock()
