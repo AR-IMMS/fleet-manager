@@ -84,7 +84,7 @@ func (a *Authenticator) Authenticate(
 	}
 
 	if err != nil {
-		if errors.Is(err, ErrUnauthenticated) {
+		if errors.Is(err, ErrUnauthenticated) || errors.Is(err, domain.ErrCredentialRejected) {
 			return domain.Principal{}, ErrUnauthenticated
 		}
 

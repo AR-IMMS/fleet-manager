@@ -30,7 +30,9 @@ flowchart LR
 
 ## Required for protocol / connection changes
 
-- Integration test with a real `opamp-go` client and, for release, the pinned official Supervisor; fake Fleet verifier permitted only in tests.
+- Integration tests with the real `opamp-go` client.
+- `.github/workflows/supervisor-identity.yml` runs the official Supervisor v0.160.0 UID continuity test on Ubuntu and Windows, plus a Mongo-backed Fleet binding test on Ubuntu. It verifies the binary checksum before execution; local test commands are documented in [identity verification and Supervisor UID binding](../architecture/identity-verification-and-supervisor-binding.md).
+- Fake Fleet verifiers are permitted only in tests.
 - Multi-client concurrent connections; disconnect/reconnect; rejected auth; revoked credential; duplicate identity/conflicting session.
 - Malformed/oversized payload and cancellation/timeout behavior.
 - Confirm server capability flags reflect actual supported behavior.

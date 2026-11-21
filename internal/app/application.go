@@ -46,8 +46,8 @@ func NewApplication(
 // Run initializes dependencies and owns their cleanup on every exit path.
 //
 // Runtime cancellation is a normal shutdown request. Startup and cleanup
-// failures are returned to the entrypoint. This foundation does not yet
-// start HTTP or OpAMP listeners.
+// failures are returned to the entrypoint. HTTP health routes and identity
+// persistence are initialized here; OpAMP activation remains separately gated.
 func (a *Application) Run(ctx context.Context) (runErr error) {
 	if !a.started.CompareAndSwap(false, true) {
 		return ErrAlreadyRun

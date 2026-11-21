@@ -71,6 +71,8 @@ linters:
             - github.com/AR-IMMS/fleet-manager/internal/platform
             - github.com/AR-IMMS/fleet-manager/internal/shared
             - github.com/open-telemetry/opamp-go
+            - github.com/gorilla/websocket
+            - google.golang.org/protobuf
           deny:
             - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/configuration
               desc: contexts must not import another context
@@ -201,12 +203,23 @@ linters:
           allow:
             - $gostd
             - github.com/AR-IMMS/fleet-manager/internal/platform
+            - github.com/AR-IMMS/fleet-manager/internal/shared/correlation
+            - google.golang.org/grpc
+            - github.com/go-playground/validator/v10
+            - github.com/google/uuid
             - go.mongodb.org/mongo-driver
           deny:
             - pkg: github.com/AR-IMMS/fleet-manager/internal/app
               desc: platform must not import app
             - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts
               desc: platform must not import contexts
+        shared-correlation:
+          list-mode: strict
+          files:
+            - "**/internal/shared/correlation/*.go"
+          allow:
+            - $gostd
+            - github.com/AR-IMMS/fleet-manager/internal/shared/correlation
         app-config:
           list-mode: strict
           files:

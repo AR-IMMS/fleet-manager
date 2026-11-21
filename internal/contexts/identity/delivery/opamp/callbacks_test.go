@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,10 +13,77 @@ import (
 
 	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/application"
 	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain"
+	"github.com/open-telemetry/opamp-go/protobufs"
+	"github.com/open-telemetry/opamp-go/server/types"
 )
 
 // verifierFunc supplies isolated authentication behavior for each test.
 type verifierFunc func(context.Context, string) (domain.Principal, error)
+
+type sessionAuthorizerFunc func(context.Context, domain.Principal, []byte) error
+
+func (f sessionAuthorizerFunc) BindAndAuthorize(ctx context.Context, principal domain.Principal, uid []byte) error {
+	return f(ctx, principal, uid)
+}
+
+func TestMessageBindsUIDAndDisconnectsRevokedSession(t *testing.T) {
+	t.Parallel()
+	principal, _ := domain.NewPrincipal("agent-1", "credential-1")
+	uid := []byte("0123456789abcdef")
+	checks := 0
+	authorizer := sessionAuthorizerFunc(func(_ context.Context, got domain.Principal, received []byte) error {
+		checks++
+		if got.InstallationID() != principal.InstallationID() || string(received) != string(uid) {
+			t.Error("callback did not authorize the authenticated agent and reported UID")
+		}
+		if checks == 1 {
+			return nil
+		}
+		return domain.ErrSessionUnauthorized
+	})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	authenticator, err := application.NewAuthenticator(verifierFunc(func(context.Context, string) (domain.Principal, error) {
+		return principal, nil
+	}), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewCallbackAdapter(authenticator, authorizer, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://localhost/v1/opamp", nil)
+	request.Header.Set("Authorization", "Bearer test-credential")
+	response := adapter.Callbacks().OnConnecting(request)
+	if !response.Accept {
+		t.Fatal("expected authenticated connection")
+	}
+	client, peer := net.Pipe()
+	defer func() {
+		if err := peer.Close(); err != nil {
+			t.Errorf("close peer: %v", err)
+		}
+	}()
+	conn := testConnection{Conn: client}
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Errorf("close client: %v", err)
+		}
+	}()
+	message := &protobufs.AgentToServer{InstanceUid: uid}
+	got := response.ConnectionCallbacks.OnMessage(context.Background(), conn, message)
+	if got == nil || string(got.InstanceUid) != string(uid) {
+		t.Fatal("first authenticated UID message should be echoed")
+	}
+	if got := response.ConnectionCallbacks.OnMessage(context.Background(), conn, message); got != nil {
+		t.Fatal("revoked session must not receive a protocol response")
+	}
+	if checks != 2 {
+		t.Fatalf("expected authorization on every message, got %d checks", checks)
+	}
+}
+
+var _ types.Connection = testConnection{}
 
 func (f verifierFunc) Verify(
 	ctx context.Context,
@@ -31,7 +99,7 @@ func (f verifierFunc) Verify(
 func TestConnectingAuthentication(t *testing.T) {
 	t.Parallel()
 
-	principal, err := domain.NewPrincipal("installation-001")
+	principal, err := domain.NewPrincipal("installation-001", "credential-001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +185,7 @@ func TestConnectingAuthentication(t *testing.T) {
 			}
 
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-			handler, err := NewHandler(authenticator, logger)
+			handler, err := NewCallbackAdapter(authenticator, sessionAuthorizerFunc(func(context.Context, domain.Principal, []byte) error { return nil }), logger)
 			if err != nil {
 				t.Fatal(err)
 			}

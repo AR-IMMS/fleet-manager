@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/application"
@@ -14,33 +15,45 @@ import (
 	"github.com/open-telemetry/opamp-go/server/types"
 )
 
-// Handler translates OpAMP connection callbacks into application operations.
+// ConnectionAuthenticator is the delivery-owned authentication dependency.
+// Implementations must honor cancellation and return safe application error classifications.
+type ConnectionAuthenticator interface {
+	Authenticate(context.Context, string) (domain.Principal, error)
+}
+
+// CallbackAdapter translates OpAMP connection callbacks into application operations.
 //
 // It contains no Fleet registration or approval policy. The authenticator
 // resolves connection authorization through its injected identity verifier.
-type Handler struct {
-	authenticator *application.Authenticator
+type CallbackAdapter struct {
+	authenticator ConnectionAuthenticator
+	authorizer    application.SessionAuthorizer
 	logger        *slog.Logger
 }
 
-// NewHandler constructs an OpAMP callback adapter.
+// NewCallbackAdapter constructs an OpAMP callback adapter.
 //
 // Dependencies are mandatory so that missing authentication or logging wiring
 // causes startup to fail rather than silently changing connection behavior.
-func NewHandler(
-	authenticator *application.Authenticator,
+func NewCallbackAdapter(
+	authenticator ConnectionAuthenticator,
+	authorizer application.SessionAuthorizer,
 	logger *slog.Logger,
-) (*Handler, error) {
-	if authenticator == nil {
+) (*CallbackAdapter, error) {
+	if authenticator == nil || (reflect.ValueOf(authenticator).Kind() == reflect.Pointer && reflect.ValueOf(authenticator).IsNil()) {
 		return nil, fmt.Errorf("authenticator is required")
 	}
 
 	if logger == nil {
 		return nil, fmt.Errorf("logger is required")
 	}
+	if authorizer == nil || (reflect.ValueOf(authorizer).Kind() == reflect.Pointer && reflect.ValueOf(authorizer).IsNil()) {
+		return nil, fmt.Errorf("session authorizer is required")
+	}
 
-	return &Handler{
+	return &CallbackAdapter{
 		authenticator: authenticator,
+		authorizer:    authorizer,
 		logger:        logger,
 	}, nil
 }
@@ -48,7 +61,7 @@ func NewHandler(
 // Callbacks returns the SDK entry points owned by this adapter.
 //
 // Authentication occurs before the SDK accepts the protocol connection.
-func (h *Handler) Callbacks() types.Callbacks {
+func (h *CallbackAdapter) Callbacks() types.Callbacks {
 	return types.Callbacks{
 		OnConnecting: h.onConnecting,
 	}
@@ -58,7 +71,7 @@ func (h *Handler) Callbacks() types.Callbacks {
 //
 // Credentials and raw verifier errors are intentionally excluded from responses
 // and logs. A temporary verification failure must not admit an unknown identity.
-func (h *Handler) onConnecting(r *http.Request) types.ConnectionResponse {
+func (h *CallbackAdapter) onConnecting(r *http.Request) types.ConnectionResponse {
 	credential, ok := bearerCredential(r.Header)
 	if !ok {
 		return unauthorized()
@@ -91,7 +104,7 @@ func (h *Handler) onConnecting(r *http.Request) types.ConnectionResponse {
 //
 // The principal is captured directly rather than recovered from client-reported
 // metadata. Connection callbacks do not establish global session ownership yet.
-func (h *Handler) connectionCallbacks(
+func (h *CallbackAdapter) connectionCallbacks(
 	principal domain.Principal,
 ) types.ConnectionCallbacks {
 	logger := h.logger.With("installation_id", principal.InstallationID())
@@ -115,6 +128,17 @@ func (h *Handler) connectionCallbacks(
 					logger.DebugContext(ctx, "OpAMP connection close returned an error")
 				}
 
+				return nil
+			}
+			if err := application.AuthorizeSupervisorMessage(ctx, h.authorizer, principal, message.InstanceUid); err != nil {
+				if errors.Is(err, domain.ErrUIDConflict) || errors.Is(err, domain.ErrSessionUnauthorized) {
+					logger.WarnContext(ctx, "OpAMP message rejected: identity binding or authorization conflict")
+				} else {
+					logger.WarnContext(ctx, "OpAMP message rejected: identity store unavailable")
+				}
+				if disconnectErr := conn.Disconnect(); disconnectErr != nil {
+					logger.DebugContext(ctx, "OpAMP connection close returned an error")
+				}
 				return nil
 			}
 

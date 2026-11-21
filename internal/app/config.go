@@ -6,6 +6,9 @@ import platformconfig "github.com/AR-IMMS/fleet-manager/internal/platform/config
 // Config aliases the platform-loaded configuration for app wiring.
 type Config = platformconfig.Config
 
+// OpAMPConfig contains protocol listener and authentication settings.
+type OpAMPConfig = platformconfig.OpAMPConfig
+
 // MongoConfig contains MongoDB connection settings.
 type MongoConfig = platformconfig.MongoConfig
 

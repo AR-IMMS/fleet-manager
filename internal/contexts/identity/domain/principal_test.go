@@ -8,7 +8,7 @@ import (
 func TestNewPrincipal(t *testing.T) {
 	t.Parallel()
 
-	principal, err := NewPrincipal("installation-001")
+	principal, err := NewPrincipal("installation-001", "credential-001")
 	if err != nil {
 		t.Fatalf("NewPrincipal() error: %v", err)
 	}
@@ -20,6 +20,9 @@ func TestNewPrincipal(t *testing.T) {
 	if principal.InstallationID() != "installation-001" {
 		t.Errorf("unexpected installation identity: %q", principal.InstallationID())
 	}
+	if principal.CredentialID() != "credential-001" {
+		t.Errorf("unexpected credential identity: %q", principal.CredentialID())
+	}
 }
 
 // TestNewPrincipalRejectsInvalidIdentity prevents ambiguous identity values.
@@ -30,11 +33,18 @@ func TestNewPrincipalRejectsInvalidIdentity(t *testing.T) {
 		t.Run(identity, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := NewPrincipal(identity)
+			_, err := NewPrincipal(identity, "credential-001")
 			if !errors.Is(err, ErrInvalidPrincipal) {
 				t.Fatalf("expected ErrInvalidPrincipal, got %v", err)
 			}
 		})
+	}
+}
+
+func TestNewPrincipalRequiresCredentialID(t *testing.T) {
+	t.Parallel()
+	if _, err := NewPrincipal("installation-001", ""); !errors.Is(err, ErrInvalidPrincipal) {
+		t.Fatalf("expected ErrInvalidPrincipal, got %v", err)
 	}
 }
 
