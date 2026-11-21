@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/application"
+	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain"
 	platformconfig "github.com/AR-IMMS/fleet-manager/internal/platform/config"
 	"github.com/open-telemetry/opamp-go/server"
 )
@@ -26,18 +27,35 @@ func serverConfig(t *testing.T) platformconfig.OpAMPConfig {
 	return cfg.OpAMPConfig
 }
 
+type nilSessionAuthorizer struct{}
+
+func (*nilSessionAuthorizer) BindAndAuthorize(context.Context, domain.Principal, []byte) error {
+	return nil
+}
+
 func TestServerRequiresDependenciesAndValidConfig(t *testing.T) {
 	cfg := serverConfig(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if _, err := NewServer(cfg, nil, logger); err == nil {
 		t.Fatal("nil callbacks accepted")
 	}
-	if _, err := NewCallbackAdapter(nil, logger); err == nil {
+	if _, err := NewCallbackAdapter(nil, nil, logger); err == nil {
 		t.Fatal("nil authenticator accepted")
 	}
 	var typedNil *application.Authenticator
-	if _, err := NewCallbackAdapter(typedNil, logger); err == nil {
+	if _, err := NewCallbackAdapter(typedNil, nil, logger); err == nil {
 		t.Fatal("typed nil accepted")
+	}
+	validAuthenticator, err := application.NewAuthenticator(verifierFunc(validVerifier), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewCallbackAdapter(validAuthenticator, nil, logger); err == nil {
+		t.Fatal("nil session authorizer accepted")
+	}
+	var typedNilAuthorizer *nilSessionAuthorizer
+	if _, err := NewCallbackAdapter(validAuthenticator, typedNilAuthorizer, logger); err == nil {
+		t.Fatal("typed nil session authorizer accepted")
 	}
 	if _, err := NewServer(cfg, &CallbackAdapter{}, logger); err == nil {
 		t.Fatal("zero callback adapter accepted")

@@ -2,8 +2,11 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
+	identityapp "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/application"
+	identitymongo "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/infrastructure/mongodb"
 	httpserver "github.com/AR-IMMS/fleet-manager/internal/platform/http-server"
 	"github.com/AR-IMMS/fleet-manager/internal/platform/mongodb"
 )
@@ -13,8 +16,10 @@ import (
 // Concrete persistence adapters stay inside composition and are not exposed
 // to the application lifecycle.
 type runtimeState struct {
-	readiness *FleetReadiness
-	http      *httpserver.Server
+	readiness     *FleetReadiness
+	http          *httpserver.Server
+	authenticator *identityapp.Authenticator
+	identityStore *identitymongo.Verifier
 }
 
 // wireRuntime constructs and starts runtime dependencies.
@@ -42,6 +47,18 @@ func wireRuntime(
 	}
 
 	resources.add("storage", db.Close)
+
+	runtime.identityStore, err = identitymongo.NewVerifier(ctx, db.Handle())
+	if err != nil {
+		return runtime, fmt.Errorf("initialize identity store: %w", err)
+	}
+	runtime.authenticator, err = identityapp.NewAuthenticator(
+		runtime.identityStore,
+		cfg.AuthTimeout,
+	)
+	if err != nil {
+		return runtime, fmt.Errorf("initialize identity authenticator: %w", err)
+	}
 
 	runtime.readiness, err = NewFleetReadiness(ReadinessCheck{
 		Name:  "storage",

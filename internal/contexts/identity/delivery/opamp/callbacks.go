@@ -27,6 +27,7 @@ type ConnectionAuthenticator interface {
 // resolves connection authorization through its injected identity verifier.
 type CallbackAdapter struct {
 	authenticator ConnectionAuthenticator
+	authorizer    application.SessionAuthorizer
 	logger        *slog.Logger
 }
 
@@ -36,6 +37,7 @@ type CallbackAdapter struct {
 // causes startup to fail rather than silently changing connection behavior.
 func NewCallbackAdapter(
 	authenticator ConnectionAuthenticator,
+	authorizer application.SessionAuthorizer,
 	logger *slog.Logger,
 ) (*CallbackAdapter, error) {
 	if authenticator == nil || (reflect.ValueOf(authenticator).Kind() == reflect.Pointer && reflect.ValueOf(authenticator).IsNil()) {
@@ -45,9 +47,13 @@ func NewCallbackAdapter(
 	if logger == nil {
 		return nil, fmt.Errorf("logger is required")
 	}
+	if authorizer == nil || (reflect.ValueOf(authorizer).Kind() == reflect.Pointer && reflect.ValueOf(authorizer).IsNil()) {
+		return nil, fmt.Errorf("session authorizer is required")
+	}
 
 	return &CallbackAdapter{
 		authenticator: authenticator,
+		authorizer:    authorizer,
 		logger:        logger,
 	}, nil
 }
@@ -122,6 +128,17 @@ func (h *CallbackAdapter) connectionCallbacks(
 					logger.DebugContext(ctx, "OpAMP connection close returned an error")
 				}
 
+				return nil
+			}
+			if err := application.AuthorizeSupervisorMessage(ctx, h.authorizer, principal, message.InstanceUid); err != nil {
+				if errors.Is(err, domain.ErrUIDConflict) || errors.Is(err, domain.ErrSessionUnauthorized) {
+					logger.WarnContext(ctx, "OpAMP message rejected: identity binding or authorization conflict")
+				} else {
+					logger.WarnContext(ctx, "OpAMP message rejected: identity store unavailable")
+				}
+				if disconnectErr := conn.Disconnect(); disconnectErr != nil {
+					logger.DebugContext(ctx, "OpAMP connection close returned an error")
+				}
 				return nil
 			}
 

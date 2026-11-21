@@ -39,7 +39,7 @@ func NewServer(cfg platformconfig.OpAMPConfig, callbacks *CallbackAdapter, logge
 	if callbacks == nil || logger == nil {
 		return nil, fmt.Errorf("OpAMP callbacks and logger are required")
 	}
-	if _, err := NewCallbackAdapter(callbacks.authenticator, callbacks.logger); err != nil {
+	if _, err := NewCallbackAdapter(callbacks.authenticator, callbacks.authorizer, callbacks.logger); err != nil {
 		return nil, err
 	}
 	if strings.ContainsAny(cfg.OpAMPPath, "{}") {
@@ -110,8 +110,8 @@ func (s *OpAMPServer) Stop(ctx context.Context) error {
 	s.sessions.drain()
 	s.cancel()
 	s.listener.closeConnections()
-	if err := s.server.Stop(ctx); err != nil {
-		s.stopErr = fmt.Errorf("stop OpAMP server")
+	if err := s.server.Stop(ctx); err != nil && !errors.Is(err, net.ErrClosed) {
+		s.stopErr = fmt.Errorf("stop OpAMP server: %w", err)
 	}
 	select {
 	case <-s.sessions.idle:

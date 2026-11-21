@@ -33,7 +33,7 @@ func newTestServer(t *testing.T, cfg platformconfig.OpAMPConfig, verify verifier
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	callbacks, err := NewCallbackAdapter(auth, logger)
+	callbacks, err := NewCallbackAdapter(auth, sessionAuthorizerFunc(func(context.Context, domain.Principal, []byte) error { return nil }), logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func validVerifier(_ context.Context, credential string) (domain.Principal, erro
 	if credential == "unavailable" {
 		return domain.Principal{}, application.ErrVerifierUnavailable
 	}
-	return domain.NewPrincipal(credential)
+	return domain.NewPrincipal(credential, "credential-001")
 }
 
 func testTLS(t *testing.T, cfg *platformconfig.OpAMPConfig) *tls.Config {

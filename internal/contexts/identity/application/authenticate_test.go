@@ -26,7 +26,7 @@ func (f verifierFunc) Verify(
 func TestAuthenticateOutcomes(t *testing.T) {
 	t.Parallel()
 
-	principal, err := domain.NewPrincipal("installation-001")
+	principal, err := domain.NewPrincipal("installation-001", "credential-001")
 	if err != nil {
 		t.Fatalf("create principal: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestAuthenticateMissingCredential(t *testing.T) {
 func TestAuthenticateDiscardsLateSuccess(t *testing.T) {
 	t.Parallel()
 
-	principal, err := domain.NewPrincipal("installation-001")
+	principal, err := domain.NewPrincipal("installation-001", "credential-001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,4 +207,53 @@ func TestNewAuthenticatorRejectsInvalidDependencies(t *testing.T) {
 	if _, err := NewAuthenticator(verifier, 0); err == nil {
 		t.Error("expected non-positive timeout to be rejected")
 	}
+}
+
+func TestAuthorizeSupervisorMessageValidatesAndCopiesUID(t *testing.T) {
+	t.Parallel()
+	principal, err := domain.NewPrincipal("agent-1", "credential-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received []byte
+	authorizer := sessionAuthorizerFunc(func(_ context.Context, got domain.Principal, uid []byte) error {
+		if got.InstallationID() != "agent-1" || got.CredentialID() != "credential-1" {
+			t.Fatalf("unexpected principal: %#v", got)
+		}
+		received = uid
+		return nil
+	})
+	uid := []byte("0123456789abcdef")
+	if err := AuthorizeSupervisorMessage(context.Background(), authorizer, principal, uid); err != nil {
+		t.Fatal(err)
+	}
+	uid[0] = 'x'
+	if received[0] != '0' {
+		t.Fatal("authorizer received caller-owned UID memory")
+	}
+}
+
+func TestAuthorizeSupervisorMessageRejectsInvalidUIDAndRevocation(t *testing.T) {
+	t.Parallel()
+	principal, _ := domain.NewPrincipal("agent-1", "credential-1")
+	called := false
+	authorizer := sessionAuthorizerFunc(func(context.Context, domain.Principal, []byte) error {
+		called = true
+		return domain.ErrSessionUnauthorized
+	})
+	if err := AuthorizeSupervisorMessage(context.Background(), authorizer, principal, []byte("short")); !errors.Is(err, domain.ErrSessionUnauthorized) {
+		t.Fatalf("invalid UID should fail closed, got %v", err)
+	}
+	if called {
+		t.Fatal("invalid UID reached persistence adapter")
+	}
+	if err := AuthorizeSupervisorMessage(context.Background(), authorizer, principal, []byte("0123456789abcdef")); !errors.Is(err, domain.ErrSessionUnauthorized) {
+		t.Fatalf("revoked session should be denied, got %v", err)
+	}
+}
+
+type sessionAuthorizerFunc func(context.Context, domain.Principal, []byte) error
+
+func (f sessionAuthorizerFunc) BindAndAuthorize(ctx context.Context, principal domain.Principal, uid []byte) error {
+	return f(ctx, principal, uid)
 }
