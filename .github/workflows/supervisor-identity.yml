@@ -1,0 +1,93 @@
+name: Supervisor identity acceptance
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+jobs:
+  uid-continuity:
+    name: UID continuity (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Download and verify pinned Supervisor
+        if: runner.os == 'Linux'
+        run: bash scripts/ci/install-opampsupervisor.sh
+      - name: Download and verify pinned Supervisor
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/install-opampsupervisor.ps1
+      - name: Build test Collector process
+        shell: bash
+        run: go build -o "$RUNNER_TEMP/fleet-test-collector" ./tests/supervisor/fakecollector
+        if: runner.os == 'Linux'
+      - name: Build test Collector process
+        shell: pwsh
+        run: go build -o "$env:RUNNER_TEMP/fleet-test-collector.exe" ./tests/supervisor/fakecollector
+        if: runner.os == 'Windows'
+      - name: Check retained and fresh Supervisor state
+        shell: bash
+        env:
+          FLEET_TEST_COLLECTOR_BIN: ${{ runner.temp }}/fleet-test-collector${{ runner.os == 'Windows' && '.exe' || '' }}
+          SUPERVISOR_TEST_LOG_DIR: ${{ runner.temp }}/supervisor-test-logs
+        run: go test -tags=supervisor -timeout=6m -count=1 -v ./tests/supervisor -run '^TestSupervisorUIDContinuityWithRetainedAndFreshState$'
+      - name: Upload redacted Supervisor logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: supervisor-uid-continuity-${{ matrix.os }}
+          path: ${{ runner.temp }}/supervisor-test-logs/supervisor-test.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  fleet-mongo-binding:
+    name: Fleet binding with MongoDB (Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mongodb:
+        image: mongo:8.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping: 1})'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Download and verify pinned Supervisor
+        run: bash scripts/ci/install-opampsupervisor.sh
+      - name: Build test Collector process
+        run: go build -o "$RUNNER_TEMP/fleet-test-collector" ./tests/supervisor/fakecollector
+      - name: Check Fleet reconnect and fresh-state conflict
+        env:
+          FLEET_MONGODB_URI: mongodb://127.0.0.1:27017
+          FLEET_TEST_COLLECTOR_BIN: ${{ runner.temp }}/fleet-test-collector
+          SUPERVISOR_TEST_LOG_DIR: ${{ runner.temp }}/supervisor-test-logs
+        run: go test -tags=supervisor,integration -timeout=8m -count=1 -v ./tests/supervisor -run '^TestSupervisorFleetUIDBindingAndFreshStateConflict$'
+      - name: Upload redacted Supervisor logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: supervisor-fleet-mongo-binding
+          path: ${{ runner.temp }}/supervisor-test-logs/supervisor-test.log
+          if-no-files-found: ignore
+          retention-days: 7
