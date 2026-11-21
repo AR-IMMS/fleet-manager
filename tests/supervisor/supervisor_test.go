@@ -75,7 +75,7 @@ func newHarness(t *testing.T) *opampHarness {
 	bin := os.Getenv("OPAMP_SUPERVISOR_BIN")
 	collector := os.Getenv("FLEET_TEST_COLLECTOR_BIN")
 	if bin == "" || collector == "" {
-		t.Skip("OPAMP_SUPERVISOR_BIN and FLEET_TEST_COLLECTOR_BIN are required")
+		requireIntegrationDependency(t, "OPAMP_SUPERVISOR_BIN and FLEET_TEST_COLLECTOR_BIN are required")
 	}
 	info, err := buildinfo.ReadFile(bin)
 	if err != nil {
@@ -99,6 +99,14 @@ func newHarness(t *testing.T) *opampHarness {
 		}
 	})
 	return h
+}
+
+func requireIntegrationDependency(t *testing.T, message string) {
+	t.Helper()
+	if os.Getenv("FLEET_REQUIRE_INTEGRATION") == "true" {
+		t.Fatal(message)
+	}
+	t.Skip(message)
 }
 
 func (h *opampHarness) server(t *testing.T, authorizer application.SessionAuthorizer) (*opamp.OpAMPServer, <-chan uidEvent) {

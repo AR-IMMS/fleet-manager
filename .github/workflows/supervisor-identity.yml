@@ -41,6 +41,7 @@ jobs:
       - name: Check retained and fresh Supervisor state
         shell: bash
         env:
+          FLEET_REQUIRE_INTEGRATION: "true"
           FLEET_TEST_COLLECTOR_BIN: ${{ runner.temp }}/fleet-test-collector${{ runner.os == 'Windows' && '.exe' || '' }}
           SUPERVISOR_TEST_LOG_DIR: ${{ runner.temp }}/supervisor-test-logs
         run: go test -tags=supervisor -timeout=6m -count=1 -v ./tests/supervisor -run '^TestSupervisorUIDContinuityWithRetainedAndFreshState$'
@@ -77,9 +78,15 @@ jobs:
         run: bash scripts/ci/install-opampsupervisor.sh
       - name: Build test Collector process
         run: go build -o "$RUNNER_TEMP/fleet-test-collector" ./tests/supervisor/fakecollector
+      - name: Mongo identity binding and revocation fence
+        env:
+          FLEET_MONGODB_URI: mongodb://127.0.0.1:27017
+          FLEET_REQUIRE_INTEGRATION: "true"
+        run: go test -race -tags=integration -timeout=3m -count=1 -v ./internal/contexts/identity/infrastructure/mongodb
       - name: Check Fleet reconnect and fresh-state conflict
         env:
           FLEET_MONGODB_URI: mongodb://127.0.0.1:27017
+          FLEET_REQUIRE_INTEGRATION: "true"
           FLEET_TEST_COLLECTOR_BIN: ${{ runner.temp }}/fleet-test-collector
           SUPERVISOR_TEST_LOG_DIR: ${{ runner.temp }}/supervisor-test-logs
         run: go test -tags=supervisor,integration -timeout=8m -count=1 -v ./tests/supervisor -run '^TestSupervisorFleetUIDBindingAndFreshStateConflict$'

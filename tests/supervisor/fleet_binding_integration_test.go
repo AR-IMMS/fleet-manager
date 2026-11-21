@@ -21,7 +21,7 @@ import (
 func TestSupervisorFleetUIDBindingAndFreshStateConflict(t *testing.T) {
 	uri := os.Getenv("FLEET_MONGODB_URI")
 	if uri == "" {
-		t.Skip("FLEET_MONGODB_URI is required for live Fleet/Mongo Supervisor acceptance")
+		requireIntegrationDependency(t, "FLEET_MONGODB_URI is required for live Fleet/Mongo Supervisor acceptance")
 	}
 	h := newHarness(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)

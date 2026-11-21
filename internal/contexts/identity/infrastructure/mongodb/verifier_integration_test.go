@@ -22,7 +22,7 @@ func TestVerifierBindingAndRevocationFence(t *testing.T) {
 		uri = os.Getenv("MONGODB_URI")
 	}
 	if uri == "" {
-		t.Skip("set FLEET_MONGODB_URI or MONGODB_URI to run Mongo identity integration test")
+		requireIntegrationDependency(t, "set FLEET_MONGODB_URI or MONGODB_URI to run Mongo identity integration test")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -86,4 +86,12 @@ func TestVerifierBindingAndRevocationFence(t *testing.T) {
 	if stored["credential_hash"] == "token-a-0123456789012345678901234567890123456" {
 		t.Fatal("raw credential was persisted")
 	}
+}
+
+func requireIntegrationDependency(t *testing.T, message string) {
+	t.Helper()
+	if os.Getenv("FLEET_REQUIRE_INTEGRATION") == "true" {
+		t.Fatal(message)
+	}
+	t.Skip(message)
 }
