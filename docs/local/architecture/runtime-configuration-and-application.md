@@ -4,6 +4,7 @@
 
 ## Package responsibilities
 
+- `cmd/fleet-manager/main.go` is the executable entrypoint. It loads configuration, initializes logging, translates OS termination signals into context cancellation, and returns a nonzero process status on failure.
 - `internal/platform/env` reads injected environment values and parses durations. It distinguishes absent settings (use the caller's default) from explicitly empty required settings (error). Optional settings become empty strings when absent or empty.
 - `internal/platform/config` owns the full runtime `Config`, environment names/defaults, and validation for HTTP, OpAMP, MongoDB, and logging settings.
 - `Config` embeds `OpAMPConfig`; existing flat JSON/YAML names and promoted Go field selectors are preserved.
@@ -15,7 +16,7 @@ Configuration loading validates the settings before application construction. `N
 
 ## Startup and shutdown today
 
-`Application.Run` is single-use. It creates a local lifecycle registry and calls `wireRuntime`. Wiring opens MongoDB, creates the Mongo credential verifier and bounded authenticator, and starts the native OpAMP listener only when `OPAMP_ENABLED=true`. The mandatory callback adapter receives the verifier for credential checks and per-message UID binding. Wiring then creates readiness checks, builds the health router, and starts HTTP. On every exit path, readiness enters drain before cleanup runs in reverse acquisition order under one bounded shutdown context.
+`cmd/fleet-manager` loads validated settings and creates the structured logger before constructing `Application`. It passes a signal-aware context to `Application.Run`; the command reports returned errors and exits nonzero after `Run` has completed cleanup. `Application.Run` is single-use. It creates a local lifecycle registry and calls `wireRuntime`. Wiring opens MongoDB, creates the Mongo credential verifier and bounded authenticator, and starts the native OpAMP listener only when `OPAMP_ENABLED=true`. The mandatory callback adapter receives the verifier for credential checks and per-message UID binding. Wiring then creates readiness checks, builds the health router, and starts HTTP. On every exit path, readiness enters drain before cleanup runs in reverse acquisition order under one bounded shutdown context.
 
 The running HTTP routes are `/health/live` and `/health/ready`. Readiness returns a generic unavailable response if Mongo is unhealthy, enabled OpAMP has not bound or its listener has failed, or shutdown has begun. The application waits for context cancellation, an HTTP serving error, or an unexpected OpAMP listener failure. The SDK does not expose a serving-error channel, so the wrapper observes fatal listener `Accept` errors.
 
