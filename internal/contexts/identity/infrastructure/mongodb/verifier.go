@@ -10,7 +10,6 @@ import (
 	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 const collectionName = "identity_installations"
@@ -53,22 +52,13 @@ func (v *Verifier) StoreActiveCredential(
 	return nil
 }
 
-// NewVerifier creates the verifier and its uniqueness constraints.
-func NewVerifier(ctx context.Context, database *mongo.Database) (*Verifier, error) {
+// NewVerifier creates a verifier over the identity collection. Call Migrate and
+// EnsureIndexes during application startup before accepting requests.
+func NewVerifier(database *mongo.Database) (*Verifier, error) {
 	if database == nil {
 		return nil, fmt.Errorf("identity database is required")
 	}
-	collection := database.Collection(collectionName)
-	_, err := collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
-		{Keys: bson.D{{Key: "credential_hash", Value: 1}}, Options: options.Index().SetUnique(true)},
-		{Keys: bson.D{{Key: "credential_id", Value: 1}}, Options: options.Index().SetUnique(true)},
-		{Keys: bson.D{{Key: "agent_id", Value: 1}}, Options: options.Index().SetUnique(true)},
-		{Keys: bson.D{{Key: "instance_uid", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"instance_uid": bson.M{"$type": "string"}})},
-	})
-	if err != nil {
-		return nil, errors.New("identity verifier indexes unavailable")
-	}
-	return &Verifier{collection: collection}, nil
+	return &Verifier{collection: database.Collection(collectionName)}, nil
 }
 
 // Verify resolves an active high-entropy credential without retaining or logging it.

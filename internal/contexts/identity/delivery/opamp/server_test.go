@@ -104,3 +104,21 @@ func TestSDKLogsRedactProtocolDetails(t *testing.T) {
 		t.Fatal("SDK diagnostics leaked")
 	}
 }
+
+type failingListener struct {
+	net.Listener
+	err error
+}
+
+func (l failingListener) Accept() (net.Conn, error) { return nil, l.err }
+
+func TestConnectionListenerReportsUnexpectedAcceptFailure(t *testing.T) {
+	want := errors.New("listener failed")
+	listener := newConnectionListener(failingListener{err: want})
+	if _, err := listener.Accept(); !errors.Is(err, want) {
+		t.Fatalf("Accept error = %v, want %v", err, want)
+	}
+	if err := listener.Err(); !errors.Is(err, want) {
+		t.Fatalf("listener failure = %v, want %v", err, want)
+	}
+}

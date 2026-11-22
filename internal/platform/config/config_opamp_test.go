@@ -29,3 +29,42 @@ func TestOpAMPGroupingPreservesJSON(t *testing.T) {
 		t.Fatal("nested config introduced")
 	}
 }
+
+func TestOpAMPActivationDefaultsDisabledAndRequiresValidBoolean(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		cfg, err := LoadConfig(func(string) (string, bool) { return "", false })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Enabled {
+			t.Fatal("OpAMP must remain disabled by default")
+		}
+	})
+
+	t.Run("explicit enable", func(t *testing.T) {
+		cfg, err := LoadConfig(func(key string) (string, bool) {
+			if key == "OPAMP_ENABLED" {
+				return "true", true
+			}
+			return "", false
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cfg.Enabled {
+			t.Fatal("explicit OPAMP_ENABLED=true was ignored")
+		}
+	})
+
+	t.Run("invalid setting", func(t *testing.T) {
+		_, err := LoadConfig(func(key string) (string, bool) {
+			if key == "OPAMP_ENABLED" {
+				return "sometimes", true
+			}
+			return "", false
+		})
+		if err == nil {
+			t.Fatal("invalid OPAMP_ENABLED must reject configuration")
+		}
+	})
+}

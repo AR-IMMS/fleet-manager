@@ -90,6 +90,13 @@ jobs:
           FLEET_TEST_COLLECTOR_BIN: ${{ runner.temp }}/fleet-test-collector
           SUPERVISOR_TEST_LOG_DIR: ${{ runner.temp }}/supervisor-test-logs
         run: go test -tags=supervisor,integration -timeout=8m -count=1 -v ./tests/supervisor -run '^TestSupervisorFleetUIDBindingAndFreshStateConflict$'
+      - name: Application wiring with Mongo and pinned Supervisor
+        env:
+          FLEET_MONGODB_URI: mongodb://127.0.0.1:27017
+          FLEET_REQUIRE_INTEGRATION: "true"
+          FLEET_TEST_COLLECTOR_BIN: ${{ runner.temp }}/fleet-test-collector
+          SUPERVISOR_TEST_LOG_DIR: ${{ runner.temp }}/supervisor-test-logs
+        run: go test -race -tags=supervisor,integration -timeout=10m -count=1 -v ./tests/supervisor -run '^TestApplicationRunStartsAuthenticatedOpAMPAndShutsDown$|^TestApplicationRunCleansUpAfterOpAMPStartupFailure$|^TestApplicationRunFailsBeforeListenersOnIdentityIndexConflict$'
       - name: Upload redacted Supervisor logs
         if: failure()
         uses: actions/upload-artifact@v4

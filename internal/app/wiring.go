@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	identityapp "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/application"
+	identityopamp "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/delivery/opamp"
 	identitymongo "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/infrastructure/mongodb"
 	httpserver "github.com/AR-IMMS/fleet-manager/internal/platform/http-server"
 	"github.com/AR-IMMS/fleet-manager/internal/platform/mongodb"
@@ -18,6 +19,7 @@ import (
 type runtimeState struct {
 	readiness     *FleetReadiness
 	http          *httpserver.Server
+	opamp         *identityopamp.OpAMPServer
 	authenticator *identityapp.Authenticator
 	identityStore *identitymongo.Verifier
 }
@@ -48,7 +50,13 @@ func wireRuntime(
 
 	resources.add("storage", db.Close)
 
-	runtime.identityStore, err = identitymongo.NewVerifier(ctx, db.Handle())
+	if err := identitymongo.Migrate(ctx, db.Handle()); err != nil {
+		return runtime, fmt.Errorf("migrate identity schema: %w", err)
+	}
+	if err := identitymongo.EnsureIndexes(ctx, db.Handle()); err != nil {
+		return runtime, fmt.Errorf("reconcile identity indexes: %w", err)
+	}
+	runtime.identityStore, err = identitymongo.NewVerifier(db.Handle())
 	if err != nil {
 		return runtime, fmt.Errorf("initialize identity store: %w", err)
 	}
@@ -60,10 +68,45 @@ func wireRuntime(
 		return runtime, fmt.Errorf("initialize identity authenticator: %w", err)
 	}
 
-	runtime.readiness, err = NewFleetReadiness(ReadinessCheck{
+	if cfg.Enabled {
+		callbacks, callbackErr := identityopamp.NewCallbackAdapter(
+			runtime.authenticator,
+			runtime.identityStore,
+			logger,
+		)
+		if callbackErr != nil {
+			return runtime, fmt.Errorf("initialize OpAMP callbacks: %w", callbackErr)
+		}
+		runtime.opamp, err = identityopamp.NewServer(cfg.OpAMPConfig, callbacks, logger)
+		if err != nil {
+			return runtime, fmt.Errorf("initialize OpAMP server: %w", err)
+		}
+		if err := runtime.opamp.Start(); err != nil {
+			return runtime, fmt.Errorf("start OpAMP server: %w", err)
+		}
+		resources.add("OpAMP", runtime.opamp.Stop)
+		logger.InfoContext(ctx, "OpAMP listener started", "address", runtime.opamp.Addr().String())
+	}
+
+	readinessChecks := []ReadinessCheck{{
 		Name:  "storage",
 		Check: db.Ping,
-	})
+	}}
+	if runtime.opamp != nil {
+		readinessChecks = append(readinessChecks, ReadinessCheck{
+			Name: "opamp",
+			Check: func(context.Context) error {
+				if err := runtime.opamp.Err(); err != nil {
+					return fmt.Errorf("OpAMP listener failed: %w", err)
+				}
+				if runtime.opamp.Addr() == nil {
+					return fmt.Errorf("OpAMP listener is unavailable")
+				}
+				return nil
+			},
+		})
+	}
+	runtime.readiness, err = NewFleetReadiness(readinessChecks...)
 	if err != nil {
 		return runtime, err
 	}

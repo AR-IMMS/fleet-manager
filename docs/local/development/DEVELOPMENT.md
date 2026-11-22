@@ -10,6 +10,8 @@
 ## Repository structure
 
 ```text
+cmd/
+└── fleet-manager/             # Runnable service entrypoint and process signals
 internal/
 ├── app/                         # Composition root and aggregate app config API
 │   ├── config.go                # Config aliases and LoadConfig façade

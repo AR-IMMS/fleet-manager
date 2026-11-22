@@ -42,7 +42,13 @@ func TestSupervisorFleetUIDBindingAndFreshStateConflict(t *testing.T) {
 			t.Errorf("disconnect MongoDB test client: %v", err)
 		}
 	})
-	verifier, err := identitymongo.NewVerifier(ctx, database)
+	if err := identitymongo.Migrate(ctx, database); err != nil {
+		t.Fatal("migrate test identity database", err)
+	}
+	if err := identitymongo.EnsureIndexes(ctx, database); err != nil {
+		t.Fatal("reconcile test identity indexes", err)
+	}
+	verifier, err := identitymongo.NewVerifier(database)
 	if err != nil {
 		t.Fatal("create Mongo identity verifier", err)
 	}

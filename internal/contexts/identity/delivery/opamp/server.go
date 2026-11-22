@@ -134,6 +134,26 @@ func (s *OpAMPServer) Addr() net.Addr {
 	return s.listener.Addr()
 }
 
+// Errors reports an unexpected listener failure after successful startup.
+func (s *OpAMPServer) Errors() <-chan error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listener == nil {
+		return nil
+	}
+	return s.listener.Errors()
+}
+
+// Err reports an unexpected listener failure, if one has occurred.
+func (s *OpAMPServer) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listener == nil {
+		return fmt.Errorf("OpAMP listener is unavailable")
+	}
+	return s.listener.Err()
+}
+
 // SDK diagnostic arguments can include raw protocol input. Keep only safe labels.
 type sdkLogger struct{ logger *slog.Logger }
 
