@@ -72,6 +72,7 @@ linters:
             - github.com/AR-IMMS/fleet-manager/internal/shared
             - github.com/open-telemetry/opamp-go
             - github.com/gorilla/websocket
+            - github.com/go-chi/chi/v5
             - google.golang.org/protobuf
           deny:
             - pkg: github.com/AR-IMMS/fleet-manager/internal/contexts/configuration
