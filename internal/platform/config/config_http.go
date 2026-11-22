@@ -15,6 +15,9 @@ import (
 // OpAMP uses a separate listener and its own settings.
 type HTTPConfig struct {
 	ListenAddress     string        `json:"listen_address" yaml:"listen_address"`
+	TLSCertFile       string        `json:"tls_cert_file" yaml:"tls_cert_file"`
+	TLSKeyFile        string        `json:"tls_key_file" yaml:"tls_key_file"`
+	ClientCAFile      string        `json:"client_ca_file" yaml:"client_ca_file"`
 	ReadHeaderTimeout time.Duration `json:"read_header_timeout" yaml:"read_header_timeout"`
 	ReadTimeout       time.Duration `json:"read_timeout" yaml:"read_timeout"`
 	WriteTimeout      time.Duration `json:"write_timeout" yaml:"write_timeout"`
@@ -37,6 +40,9 @@ func loadHTTPConfig(reader env.Reader) (HTTPConfig, error) {
 	if err != nil {
 		return HTTPConfig{}, err
 	}
+	cfg.TLSCertFile = reader.Optional("FLEET_HTTP_TLS_CERT_FILE")
+	cfg.TLSKeyFile = reader.Optional("FLEET_HTTP_TLS_KEY_FILE")
+	cfg.ClientCAFile = reader.Optional("FLEET_HTTP_CLIENT_CA_FILE")
 
 	cfg.ReadHeaderTimeout, err = reader.Duration(
 		"FLEET_HTTP_READ_HEADER_TIMEOUT",
@@ -96,8 +102,16 @@ func (c HTTPConfig) Validate() error {
 	}
 
 	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("http listener must use an explicit loopback ip")
+	hasCert := c.TLSCertFile != ""
+	hasKey := c.TLSKeyFile != ""
+	if hasCert != hasKey {
+		return fmt.Errorf("http TLS certificate and key must be configured together")
+	}
+	if !hasCert && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("http listener must use an explicit loopback ip without TLS")
+	}
+	if c.ClientCAFile != "" && !hasCert {
+		return fmt.Errorf("http client CA requires TLS")
 	}
 
 	portNumber, err := strconv.Atoi(port)

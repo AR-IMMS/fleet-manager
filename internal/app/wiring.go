@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	identityapp "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/application"
+	identityhttp "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/delivery/http"
 	identityopamp "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/delivery/opamp"
 	identitymongo "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/infrastructure/mongodb"
 	httpserver "github.com/AR-IMMS/fleet-manager/internal/platform/http-server"
@@ -67,6 +68,26 @@ func wireRuntime(
 	if err != nil {
 		return runtime, fmt.Errorf("initialize identity authenticator: %w", err)
 	}
+	var enrollmentHandlers []*identityhttp.EnrollmentHandler
+	if cfg.Enrollment.Enabled {
+		enrollmentStore, storeErr := identitymongo.NewEnrollmentStore(db.Handle(), cfg.Enrollment.EncryptionKey)
+		if storeErr != nil {
+			return runtime, fmt.Errorf("initialize enrollment store: %w", storeErr)
+		}
+		if transactionErr := enrollmentStore.VerifyTransactionSupport(ctx); transactionErr != nil {
+			return runtime, fmt.Errorf("verify Mongo transaction support for enrollment: %w", transactionErr)
+		}
+		enrollmentService := &identityapp.EnrollmentService{
+			Store: enrollmentStore, DefaultInviteTTL: cfg.Enrollment.DefaultInviteTTL,
+			MaximumInviteTTL: cfg.Enrollment.MaximumInviteTTL, RecoveryTTL: cfg.Enrollment.RecoveryTTL,
+			OpAMPEndpoint: cfg.Enrollment.OpAMPEndpoint,
+		}
+		enrollmentHandler, handlerErr := identityhttp.NewEnrollmentHandler(enrollmentService, cfg.Enrollment.CoreClientCN)
+		if handlerErr != nil {
+			return runtime, fmt.Errorf("initialize enrollment HTTP adapter: %w", handlerErr)
+		}
+		enrollmentHandlers = append(enrollmentHandlers, enrollmentHandler)
+	}
 
 	if cfg.Enabled {
 		callbacks, callbackErr := identityopamp.NewCallbackAdapter(
@@ -87,7 +108,6 @@ func wireRuntime(
 		resources.add("OpAMP", runtime.opamp.Stop)
 		logger.InfoContext(ctx, "OpAMP listener started", "address", runtime.opamp.Addr().String())
 	}
-
 	readinessChecks := []ReadinessCheck{{
 		Name:  "storage",
 		Check: db.Ping,
@@ -114,6 +134,7 @@ func wireRuntime(
 	router, err := newRouter(
 		runtime.readiness,
 		cfg.HTTP.ReadinessTimeout,
+		enrollmentHandlers...,
 	)
 	if err != nil {
 		return runtime, err
@@ -122,6 +143,9 @@ func wireRuntime(
 	runtime.http, err = httpserver.New(
 		httpserver.Options{
 			ListenAddress:     cfg.HTTP.ListenAddress,
+			TLSCertFile:       cfg.HTTP.TLSCertFile,
+			TLSKeyFile:        cfg.HTTP.TLSKeyFile,
+			ClientCAFile:      cfg.HTTP.ClientCAFile,
 			ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout,
 			ReadTimeout:       cfg.HTTP.ReadTimeout,
 			WriteTimeout:      cfg.HTTP.WriteTimeout,

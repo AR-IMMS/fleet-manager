@@ -16,10 +16,11 @@ import (
 // such as "5s" require explicit parsing, as performed by LoadConfig.
 type Config struct {
 	OpAMPConfig     `yaml:",inline"`
-	ShutdownTimeout time.Duration `json:"shutdown_timeout" yaml:"shutdown_timeout"`
-	Mongo           MongoConfig   `json:"-" yaml:"-"`
-	Logging         LoggingConfig `json:"-" yaml:"-"`
-	HTTP            HTTPConfig    `json:"http" yaml:"http"`
+	ShutdownTimeout time.Duration    `json:"shutdown_timeout" yaml:"shutdown_timeout"`
+	Mongo           MongoConfig      `json:"-" yaml:"-"`
+	Logging         LoggingConfig    `json:"-" yaml:"-"`
+	HTTP            HTTPConfig       `json:"http" yaml:"http"`
+	Enrollment      EnrollmentConfig `json:"enrollment" yaml:"enrollment"`
 }
 
 // LookupEnv is the environment lookup accepted by the configuration loader.
@@ -63,6 +64,10 @@ func LoadConfig(lookup env.LookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cfg.Enrollment, err = loadEnrollmentConfig(env)
+	if err != nil {
+		return Config{}, err
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -90,6 +95,18 @@ func (c Config) Validate() error {
 
 	if err := c.Logging.Validate(); err != nil {
 		return err
+	}
+	if err := c.HTTP.Validate(); err != nil {
+		return err
+	}
+	if err := c.Enrollment.Validate(); err != nil {
+		return err
+	}
+	if c.Enrollment.Enabled && (c.HTTP.TLSCertFile == "" || c.HTTP.TLSKeyFile == "" || c.HTTP.ClientCAFile == "") {
+		return fmt.Errorf("enrollment requires HTTPS and a dedicated Core client CA")
+	}
+	if c.Enrollment.Enabled && (!c.Enabled || c.TLSCertFile == "" || c.TLSKeyFile == "") {
+		return fmt.Errorf("enrollment requires the OpAMP listener to be enabled with TLS")
 	}
 
 	return nil

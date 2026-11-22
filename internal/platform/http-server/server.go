@@ -2,10 +2,13 @@ package httpserver
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -25,6 +28,9 @@ var (
 // Public listeners require an explicit TLS or trusted proxy design.
 type Options struct {
 	ListenAddress     string
+	TLSCertFile       string
+	TLSKeyFile        string
+	ClientCAFile      string
 	ReadHeaderTimeout time.Duration
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
@@ -53,6 +59,12 @@ func (o Options) Validate() error {
 		o.WriteTimeout <= 0 ||
 		o.IdleTimeout <= 0 {
 		return fmt.Errorf("http timeouts must be positive")
+	}
+	if (o.TLSCertFile == "") != (o.TLSKeyFile == "") {
+		return fmt.Errorf("http TLS certificate and key must be configured together")
+	}
+	if o.ClientCAFile != "" && o.TLSCertFile == "" {
+		return fmt.Errorf("http client CA requires TLS")
 	}
 
 	return nil
@@ -88,6 +100,27 @@ func New(cfg Options, handler http.Handler) (*Server, error) {
 		return nil, fmt.Errorf("http handler is required")
 	}
 
+	var tlsConfig *tls.Config
+	if cfg.TLSCertFile != "" {
+		certificate, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load http TLS certificate")
+		}
+		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}
+		if cfg.ClientCAFile != "" {
+			caPEM, err := os.ReadFile(cfg.ClientCAFile)
+			if err != nil {
+				return nil, fmt.Errorf("load http client CA")
+			}
+			clientCAs := x509.NewCertPool()
+			if !clientCAs.AppendCertsFromPEM(caPEM) {
+				return nil, fmt.Errorf("http client CA contains no usable certificates")
+			}
+			tlsConfig.ClientCAs = clientCAs
+			tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
+		}
+	}
+
 	return &Server{
 		options: cfg,
 		server: &http.Server{
@@ -97,6 +130,7 @@ func New(cfg Options, handler http.Handler) (*Server, error) {
 			WriteTimeout:      cfg.WriteTimeout,
 			IdleTimeout:       cfg.IdleTimeout,
 			MaxHeaderBytes:    16 << 10,
+			TLSConfig:         tlsConfig,
 		},
 		done:   make(chan struct{}),
 		errors: make(chan error, 1),
@@ -179,7 +213,11 @@ func (s *Server) serve() {
 	defer close(s.done)
 	defer close(s.errors)
 
-	err := s.server.Serve(s.listener)
+	listener := net.Listener(s.listener)
+	if s.server.TLSConfig != nil {
+		listener = tls.NewListener(listener, s.server.TLSConfig)
+	}
+	err := s.server.Serve(listener)
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		s.errors <- ErrServe
 	}

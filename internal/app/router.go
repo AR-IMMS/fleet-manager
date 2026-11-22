@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	identityhttp "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/delivery/http"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/AR-IMMS/fleet-manager/internal/platform/http-server"
@@ -17,6 +18,7 @@ import (
 func newRouter(
 	checker httpserver.ReadinessChecker,
 	readinessTimeout time.Duration,
+	enrollmentHandlers ...*identityhttp.EnrollmentHandler,
 ) (http.Handler, error) {
 	health, err := httpserver.NewHealthHandler(checker, readinessTimeout)
 	if err != nil {
@@ -27,6 +29,11 @@ func newRouter(
 
 	router.Get("/health/live", health.Live)
 	router.Get("/health/ready", health.Ready)
+	for _, handler := range enrollmentHandlers {
+		if handler != nil {
+			handler.Mount(router)
+		}
+	}
 
 	return router, nil
 }
