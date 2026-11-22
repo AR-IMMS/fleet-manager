@@ -185,13 +185,20 @@ type supervisorConfig struct {
 }
 
 func (h *opampHarness) start(t *testing.T, endpoint, stateDir string) *supervisorProcess {
+	return h.startWithCredential(t, endpoint, stateDir, testCredential)
+}
+
+func (h *opampHarness) startWithCredential(t *testing.T, endpoint, stateDir, credential string) *supervisorProcess {
 	t.Helper()
+	if credential == "" {
+		t.Fatal("Supervisor test credential is required")
+	}
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal("create Supervisor state directory", err)
 	}
 	cfg := supervisorConfig{}
 	cfg.Server.Endpoint = endpoint
-	cfg.Server.Headers = map[string]string{"Authorization": "Bearer " + testCredential}
+	cfg.Server.Headers = map[string]string{"Authorization": "Bearer " + credential}
 	portListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal("reserve local Supervisor OpAMP port", err)
