@@ -25,6 +25,7 @@ func TestMigrateAndEnsureIndexesHaveSeparateLifecycles(t *testing.T) {
 	}
 	assertMigrationApplied(t, ctx, database)
 	assertIndexNames(t, ctx, database.Collection(collectionName), []string{"_id_"})
+	assertIndexNames(t, ctx, database.Collection(invitationsCollectionName), []string{"_id_"})
 	if _, err := NewVerifier(database); err != nil {
 		t.Fatal("construct verifier without schema side effects", err)
 	}
@@ -34,9 +35,16 @@ func TestMigrateAndEnsureIndexesHaveSeparateLifecycles(t *testing.T) {
 		t.Fatal("reconcile identity indexes", err)
 	}
 	assertIndexNames(t, ctx, database.Collection(collectionName), []string{
-		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1", "instance_uid_1",
+		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1", "instance_uid_1", "node_id_1",
 	})
 	assertIdentityIndexOptions(t, ctx, database.Collection(collectionName))
+	assertIndexNames(t, ctx, database.Collection(invitationsCollectionName), []string{
+		"_id_", "actor_id_1_idempotency_hash_1", "invitation_id_1", "operation_id_1", "token_hash_1",
+	})
+	assertIndexNames(t, ctx, database.Collection(invitationEscrowName), []string{"_id_", "expires_at_1"})
+	assertIndexNames(t, ctx, database.Collection(attemptsCollectionName), []string{
+		"_id_", "agent_id_1", "attempt_id_1", "expires_at_1",
+	})
 	if err := database.Collection(collectionName).Indexes().DropOne(ctx, "agent_id_1"); err != nil {
 		t.Fatal("remove index to verify startup reconciliation", err)
 	}
@@ -45,13 +53,13 @@ func TestMigrateAndEnsureIndexesHaveSeparateLifecycles(t *testing.T) {
 		t.Fatal("reapply identity migration", err)
 	}
 	assertIndexNames(t, ctx, database.Collection(collectionName), []string{
-		"_id_", "credential_hash_1", "credential_id_1", "instance_uid_1",
+		"_id_", "credential_hash_1", "credential_id_1", "instance_uid_1", "node_id_1",
 	})
 	if err := EnsureIndexes(ctx, database); err != nil {
 		t.Fatal("reconcile identity indexes on subsequent startup", err)
 	}
 	assertIndexNames(t, ctx, database.Collection(collectionName), []string{
-		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1", "instance_uid_1",
+		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1", "instance_uid_1", "node_id_1",
 	})
 }
 
@@ -183,6 +191,13 @@ func assertMigrationApplied(t *testing.T, ctx context.Context, database *driver.
 	if record.ID != identityBaselineMigrationID || record.Checksum != identityBaselineMigrationHash || record.Applied.IsZero() {
 		t.Fatalf("migration history record is incomplete: %+v", record)
 	}
+	var enrollmentMigration migrationRecord
+	if err := database.Collection(migrationsCollectionName).FindOne(ctx, bson.M{"_id": enrollmentMigrationID}).Decode(&enrollmentMigration); err != nil {
+		t.Fatal("read enrollment migration history", err)
+	}
+	if enrollmentMigration.Checksum != enrollmentMigrationHash || enrollmentMigration.AppliedAt.IsZero() {
+		t.Fatalf("enrollment migration history record is incomplete: %+v", enrollmentMigration)
+	}
 }
 
 func assertIdentityIndexOptions(t *testing.T, ctx context.Context, collection *driver.Collection) {
@@ -209,6 +224,14 @@ func assertIdentityIndexOptions(t *testing.T, ctx context.Context, collection *d
 			filterType, typeOK := documentValue(condition, "$type").(string)
 			if !ok || !conditionOK || !typeOK || filterType != "string" {
 				t.Errorf("instance UID index has wrong partial filter: %#v", documentValue(index, "partialFilterExpression"))
+			}
+		}
+		if name == "node_id_1" {
+			partial, ok := documentValue(index, "partialFilterExpression").(bson.D)
+			condition, conditionOK := documentValue(partial, "node_id").(bson.D)
+			filterType, typeOK := documentValue(condition, "$type").(string)
+			if !ok || !conditionOK || !typeOK || filterType != "string" {
+				t.Errorf("Node ID index has wrong partial filter: %#v", documentValue(index, "partialFilterExpression"))
 			}
 		}
 	}
