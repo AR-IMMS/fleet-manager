@@ -33,8 +33,18 @@ func TestVerifierBindingAndRevocationFence(t *testing.T) {
 	defer func() { _ = client.Disconnect(context.Background()) }()
 	db := client.Database("ar_imms_fleet_identity_test")
 	_ = db.Collection(collectionName).Drop(ctx)
-	t.Cleanup(func() { _ = db.Collection(collectionName).Drop(context.Background()) })
-	verifier, err := NewVerifier(ctx, db)
+	_ = db.Collection(migrationsCollectionName).Drop(ctx)
+	t.Cleanup(func() {
+		_ = db.Collection(collectionName).Drop(context.Background())
+		_ = db.Collection(migrationsCollectionName).Drop(context.Background())
+	})
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatal("migrate identity schema", err)
+	}
+	if err := EnsureIndexes(ctx, db); err != nil {
+		t.Fatal("reconcile identity indexes", err)
+	}
+	verifier, err := NewVerifier(db)
 	if err != nil {
 		t.Fatal("create verifier", err)
 	}

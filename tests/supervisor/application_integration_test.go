@@ -34,7 +34,13 @@ func TestApplicationRunStartsAuthenticatedOpAMPAndShutsDown(t *testing.T) {
 
 	client, database := createApplicationTestDatabase(t, ctx, mongoURI)
 	databaseName := database.Name()
-	verifier, err := identitymongo.NewVerifier(ctx, database)
+	if err := identitymongo.Migrate(ctx, database); err != nil {
+		t.Fatal("migrate test identity database", err)
+	}
+	if err := identitymongo.EnsureIndexes(ctx, database); err != nil {
+		t.Fatal("reconcile test identity indexes", err)
+	}
+	verifier, err := identitymongo.NewVerifier(database)
 	if err != nil {
 		t.Fatal("create verifier", err)
 	}
@@ -130,6 +136,35 @@ func TestApplicationRunCleansUpAfterOpAMPStartupFailure(t *testing.T) {
 	assertAddressReleased(t, httpAddress)
 	if err := client.Ping(ctx, readpref.Primary()); err != nil {
 		t.Fatalf("test Mongo client unexpectedly disconnected: %v", err)
+	}
+}
+
+func TestApplicationRunFailsBeforeListenersOnIdentityIndexConflict(t *testing.T) {
+	mongoURI := requiredMongoURI(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	client, database := createApplicationTestDatabase(t, ctx, mongoURI)
+	_, err := database.Collection("identity_installations").Indexes().CreateOne(ctx, driver.IndexModel{
+		Keys:    bson.D{{Key: "credential_hash", Value: 1}},
+		Options: options.Index().SetName("credential_hash_1"),
+	})
+	if err != nil {
+		t.Fatal("create conflicting identity index", err)
+	}
+
+	httpAddress := reserveLoopbackAddress(t)
+	cfg := applicationIntegrationConfig(t, mongoURI, database.Name(), "127.0.0.1:0", httpAddress)
+	cfg.Enabled = false
+	application, err := app.NewApplication(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal("construct application", err)
+	}
+	if err := application.Run(ctx); err == nil {
+		t.Fatal("application must fail closed on an incompatible identity index")
+	}
+	assertAddressReleased(t, httpAddress)
+	if err := client.Ping(ctx, readpref.Primary()); err != nil {
+		t.Fatalf("test Mongo client unexpectedly disconnected after application failure: %v", err)
 	}
 }
 

@@ -50,7 +50,13 @@ func wireRuntime(
 
 	resources.add("storage", db.Close)
 
-	runtime.identityStore, err = identitymongo.NewVerifier(ctx, db.Handle())
+	if err := identitymongo.Migrate(ctx, db.Handle()); err != nil {
+		return runtime, fmt.Errorf("migrate identity schema: %w", err)
+	}
+	if err := identitymongo.EnsureIndexes(ctx, db.Handle()); err != nil {
+		return runtime, fmt.Errorf("reconcile identity indexes: %w", err)
+	}
+	runtime.identityStore, err = identitymongo.NewVerifier(db.Handle())
 	if err != nil {
 		return runtime, fmt.Errorf("initialize identity store: %w", err)
 	}

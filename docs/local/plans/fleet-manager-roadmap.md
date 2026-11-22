@@ -1,7 +1,7 @@
 # Fleet Manager — Implementation Roadmap
 
-Updated: 2026-11-19
-Status: PLANNED — checklist derived from the agreed B+ direction; not a source audit or implementation-completion claim.
+Updated: 2026-11-22
+Status: IN PROGRESS — roadmap reflects source and test evidence checked on this date; checkpoint status is not a production-readiness claim.
 
 ## Purpose and scope
 
@@ -24,7 +24,7 @@ The official OTel OpAMP Supervisor is the sole Collector lifecycle/config execut
 
 The Agent-side baseline was verified at telemetry-agent commit `1a7c15046bbf241fe18b631fda657c8979fe4834`, CI run `44380941059`. Windows and Ubuntu passed native service lifecycle, focused race checks, Supervisor fallback/OTLP and provisional Mock Fleet config/rollback/revocation E2Es. Docker-backed suites passed on Ubuntu; Windows Docker suites were skipped.
 
-This proves tested Agent behavior with a fixture and real pinned Supervisor/Collector, not production Fleet/Core interoperability. Fleet implementation progress has not been audited for this roadmap. Preserve existing code and assess it before assigning DONE statuses.
+This proves tested Agent behavior with a fixture and real pinned Supervisor/Collector, not production Fleet/Core interoperability. Fleet checkpoint notes below distinguish implemented code from local and hosted evidence.
 
 ## Checkpoint summary
 
@@ -44,13 +44,13 @@ This proves tested Agent behavior with a fixture and real pinned Supervisor/Coll
 - [x] Assess existing code, tests, local instructions and documentation; identify obsolete adapter-only assumptions.
 - [x] Establish fleet-manager entrypoint, application composition and validated configuration.
 - [x] Compose HTTP and native OpAMP listeners with explicit TLS/termination policy, limits and graceful shutdown. OpAMP is disabled unless `OPAMP_ENABLED=true`.
-- [ ] Add Fleet-owned MongoDB connection, migrations/indexes and documented deployment-topology requirements.
+- [x] Add Fleet-owned MongoDB connection, versioned identity baseline migration, per-startup index reconciliation and documented deployment-topology requirements.
 - [x] Add structured secret-safe logs, request correlation, liveness and readiness, including optional OpAMP readiness.
 - [x] Establish formatting, architecture checks, tests, vet/build and CI.
 
 Acceptance: service starts with valid settings, rejects invalid settings, reports dependency readiness correctly and shuts down without leaking listeners/workers. Persistence is confined to the Fleet database. Transaction-dependent behavior is tested against a supported MongoDB topology.
 
-**Current acceptance note:** The `cmd/fleet-manager` process entrypoint loads validated config, initializes structured logging, handles OS termination, and delegates startup/shutdown to `Application.Run`. Application-level OpAMP startup, Mongo readiness, authenticated Supervisor UID binding, shutdown, and listener-bind failure cleanup are covered by the Mongo plus pinned Supervisor integration test. FM-01 remains IN PROGRESS because Mongo migration/deployment-topology requirements are not complete. OpAMP remains disabled by default while credential provisioning/revocation authorization and C01/C04 security decisions remain open.
+**Current acceptance note (2026-11-22):** `cmd/fleet-manager` delegates to `Application.Run`. Startup opens Mongo, applies immutable `identity-installations-v1`, reconciles required indexes independently on every startup, then constructs the verifier and listeners. Migration checksum drift, unknown migration history, duplicate legacy values, and incompatible index definitions fail startup without deleting identity records. The local race-enabled Mongo integration suite passed for concurrent baseline starts, index recreation/options, conflict and duplicate-data failure, and binding/revocation behavior. The full local pinned-Supervisor plus Mongo integration suite passed for retained-state UID continuity, fresh-state conflict, application startup/readiness/authentication/UID binding/shutdown, listener-bind cleanup, and index-conflict startup failure. CI's workflow uses MongoDB 8.0 standalone; the updated hosted workflow has not run for this change. The minimum supported MongoDB version and production HA/backup/failover topology remain OPEN, so FM-01 remains IN PROGRESS. OpAMP remains disabled by default while credential provisioning/revocation authorization and C01/C04 security decisions remain open.
 
 ## FM-02 — Service authentication and authorization
 
@@ -155,7 +155,7 @@ Use PLANNED, IN_PROGRESS, BLOCKED, DONE for implementation. Separately record PA
 
 | Checkpoint | Source commit | Test / CI link | Environment | Result | Limits / follow-up |
 |---|---|---|---|---|---|
-| Baseline assessment | — | — | — | NOT_RUN | Inspect repository before assigning implementation progress |
+| FM-01 Mongo migrations/indexes | Working tree (not committed) | Local race-enabled Mongo + pinned-Supervisor commands recorded in identity architecture doc | `.env.local` Mongo; Supervisor v0.160.0 on Windows | PASS locally | Hosted workflow pending; Mongo minimum version and production HA/backup/failover topology OPEN |
 
 ## Deferred baseline scope
 
