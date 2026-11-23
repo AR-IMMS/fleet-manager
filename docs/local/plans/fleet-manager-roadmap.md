@@ -74,10 +74,18 @@ this was a UAT packaging/configuration error, not a reproduced product defect.
 
 Current UAT limits: Prometheus has `host_id` but no `agent_id`/installation
 attribution; the checked-in Gateway has metrics only and no logs/traces pipeline.
-The Windows protected-store test did not run successfully on this host because
-the process token is not elevated; the required CI test remains the authoritative
-Windows integration gate. Hosted runs for the new commits are pending. FM-01 is
-still IN PROGRESS; this evidence does not establish production readiness.
+The protected-store test could not run on this host because its process token is
+not elevated; hosted Windows Agent CI passed the protected-store integration
+step. Hosted PR checks passed for Fleet Go quality and Ubuntu/Windows tests,
+pinned Supervisor UID continuity on both OSes, Mongo-backed binding, and Core
+quality plus secret scanning:
+
+- Fleet: [Go quality run 45164475382](https://github.com/AR-IMMS/fleet-manager/actions/runs/45164475382), [Supervisor/Mongo run 45164475481](https://github.com/AR-IMMS/fleet-manager/actions/runs/45164475481).
+- Core: [CI run 45165256044](https://github.com/AR-IMMS/core-backend/actions/runs/45165256044).
+- Agent: [CI run 45164194747](https://github.com/AR-IMMS/telemetry-agent/actions/runs/45164194747).
+
+FM-01 remains IN PROGRESS; this evidence does not establish production
+readiness.
 
 ## FM-02 — Service authentication and authorization
 
@@ -183,7 +191,7 @@ Use PLANNED, IN_PROGRESS, BLOCKED, DONE for implementation. Separately record PA
 
 | Checkpoint | Source commit | Test / CI link | Environment | Result | Limits / follow-up |
 |---|---|---|---|---|---|
-| FM-01 Mongo migrations/indexes | Working tree (not committed) | Local race-enabled Mongo + pinned-Supervisor commands recorded in identity architecture doc | `.env.local` Mongo; Supervisor v0.160.0 on Windows | PASS locally | Hosted workflow pending; Mongo minimum version and production HA/backup/failover topology OPEN |
+| FM-01 Mongo migrations/indexes | `b555d5a0c58c285bec749381df70840a5d65cafd` | Local race-enabled Mongo and pinned Supervisor checks; [hosted Supervisor/Mongo run 45164475481](https://github.com/AR-IMMS/fleet-manager/actions/runs/45164475481) | Local replica set; Supervisor v0.160.0 on Windows; hosted Ubuntu/Windows | PASS locally and hosted | Mongo minimum version and production HA/backup/failover topology OPEN |
 
 ## Deferred baseline scope
 
