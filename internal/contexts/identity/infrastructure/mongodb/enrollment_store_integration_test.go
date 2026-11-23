@@ -467,6 +467,70 @@ func TestInvitationIdempotencyUsesCorePrincipalNotForwardedActor(t *testing.T) {
 	}
 }
 
+func TestConcurrentCreateInvitationReplaysCanonicalResult(t *testing.T) {
+	ctx, database := newMigrationTestDatabase(t)
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal("apply identity schema migration", err)
+	}
+	if err := EnsureIndexes(ctx, database); err != nil {
+		t.Fatal("reconcile identity indexes", err)
+	}
+	store, err := NewEnrollmentStore(database, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal("create enrollment store", err)
+	}
+	service := application.EnrollmentService{
+		Store: store, DefaultInviteTTL: 10 * time.Minute, MaximumInviteTTL: time.Hour,
+		RecoveryTTL: 24 * time.Hour, OpAMPEndpoint: "wss://fleet.example.test/v1/opamp",
+	}
+	command := application.CreateInvitationCommand{
+		OperationID: "operation-concurrent-invitation", CorePrincipalID: "core-service-concurrent",
+		IdempotencyKey: "idempotency-concurrent-invitation", ActorID: "human-concurrent",
+		NodeID: "node-concurrent-invitation",
+	}
+	const callers = 12
+	var results [callers]application.InvitationResult
+	var errorsByCaller [callers]error
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	for index := range results {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			<-start
+			results[index], errorsByCaller[index] = service.CreateInvitation(ctx, command)
+		}(index)
+	}
+	close(start)
+	wait.Wait()
+
+	canonicalID, canonicalSecret := results[0].InvitationID, results[0].Secret
+	if canonicalID == "" || canonicalSecret == "" {
+		t.Fatal("concurrent calls did not return a canonical invitation")
+	}
+	createdCount := 0
+	for index, result := range results {
+		if errorsByCaller[index] != nil {
+			t.Fatalf("concurrent identical invitation %d failed: %v", index, errorsByCaller[index])
+		}
+		if result.InvitationID != canonicalID || result.Secret != canonicalSecret || result.OperationID != command.OperationID {
+			t.Fatalf("concurrent invitation %d did not replay canonical result: got=%+v", index, result)
+		}
+		if !result.Replayed {
+			createdCount++
+		}
+	}
+	if createdCount != 1 {
+		t.Fatalf("non-replayed create count=%d, want exactly one", createdCount)
+	}
+
+	changedFingerprint := command
+	changedFingerprint.NodeID = "different-node-concurrent"
+	if _, err := service.CreateInvitation(ctx, changedFingerprint); !errors.Is(err, domain.ErrEnrollmentConflict) {
+		t.Fatalf("changed fingerprint should conflict after concurrent create, got %v", err)
+	}
+}
+
 func TestConcurrentExchangeReplaysOneCredential(t *testing.T) {
 	ctx, database := newMigrationTestDatabase(t)
 	if err := Migrate(ctx, database); err != nil {

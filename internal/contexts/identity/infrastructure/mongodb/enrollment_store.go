@@ -267,7 +267,10 @@ func (s *EnrollmentStore) CreateInvitation(ctx context.Context, invitation domai
 		}
 		if _, insertErr := collection.InsertOne(txCtx, stored); insertErr != nil {
 			if mongo.IsDuplicateKeyError(insertErr) {
-				return nil, domain.ErrEnrollmentConflict
+				// Resolve a concurrent insert after the transaction aborts. The
+				// winner is canonical for this principal/key; the caller below
+				// still checks its operation and normalized request fingerprint.
+				return nil, insertErr
 			}
 			return nil, insertErr
 		}
@@ -280,10 +283,35 @@ func (s *EnrollmentStore) CreateInvitation(ctx context.Context, invitation domai
 		return stored, nil
 	})
 	if err != nil {
-		if errors.Is(err, domain.ErrInvitationRejected) || errors.Is(err, domain.ErrEnrollmentConflict) {
-			return domain.EnrollmentInvitation{}, err
+		if mongo.IsDuplicateKeyError(err) {
+			collection := s.database.Collection(invitationsCollectionName)
+			filter := bson.M{"core_principal_id": invitation.CorePrincipalID, "idempotency_hash": invitation.IdempotencyHash}
+			if findErr := collection.FindOne(ctx, filter).Decode(&stored); findErr == nil {
+				if stored.OperationID != invitation.OperationID || stored.Fingerprint != invitation.Fingerprint {
+					return domain.EnrollmentInvitation{}, domain.ErrEnrollmentConflict
+				}
+				var escrow invitationEscrow
+				if escrowErr := s.database.Collection(invitationEscrowName).FindOne(ctx, bson.M{"_id": stored.InvitationID, "expires_at": bson.M{"$gt": s.clock()}}).Decode(&escrow); escrowErr != nil {
+					if errors.Is(escrowErr, mongo.ErrNoDocuments) {
+						return domain.EnrollmentInvitation{}, domain.ErrInvitationRejected
+					}
+					return domain.EnrollmentInvitation{}, errEnrollmentStoreUnavailable
+				}
+				storedSecret = escrow.Ciphertext
+				replayed = true
+			} else if errors.Is(findErr, mongo.ErrNoDocuments) {
+				// A duplicate on another unique key (for example an operation
+				// ID collision) is not an idempotent replay.
+				return domain.EnrollmentInvitation{}, domain.ErrEnrollmentConflict
+			} else {
+				return domain.EnrollmentInvitation{}, errEnrollmentStoreUnavailable
+			}
+		} else {
+			if errors.Is(err, domain.ErrInvitationRejected) || errors.Is(err, domain.ErrEnrollmentConflict) {
+				return domain.EnrollmentInvitation{}, err
+			}
+			return domain.EnrollmentInvitation{}, errEnrollmentStoreUnavailable
 		}
-		return domain.EnrollmentInvitation{}, errEnrollmentStoreUnavailable
 	}
 	if stored.OperationID != invitation.OperationID || stored.Fingerprint != invitation.Fingerprint {
 		return domain.EnrollmentInvitation{}, domain.ErrEnrollmentConflict
