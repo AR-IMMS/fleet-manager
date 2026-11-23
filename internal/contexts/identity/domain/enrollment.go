@@ -12,6 +12,7 @@ var (
 	ErrInvitationRejected         = errors.New("enrollment invitation is not valid")
 	ErrEnrollmentRecoveryRejected = errors.New("enrollment recovery rejected")
 	ErrEnrollmentNotFound         = errors.New("enrollment operation not found")
+	ErrEnrollmentUnavailable      = errors.New("enrollment persistence unavailable")
 )
 
 type EnrollmentInvitationStatus string
@@ -46,6 +47,7 @@ type EnrollmentGate struct {
 // persistence adapter while a pending replay remains allowed.
 type EnrollmentInvitation struct {
 	OperationID     string
+	CorePrincipalID string
 	IdempotencyHash string
 	Fingerprint     string
 	ActorID         string
@@ -54,6 +56,7 @@ type EnrollmentInvitation struct {
 	Secret          string
 	Status          EnrollmentInvitationStatus
 	ExpiresAt       time.Time
+	Replayed        bool
 }
 
 // EnrollmentAttempt is a durable one-time exchange. Result is encrypted by
@@ -81,16 +84,26 @@ type EnrollmentResult struct {
 // EnrollmentStatus is a secret-free enrollment summary for Core reconciliation.
 type EnrollmentStatus struct {
 	OperationID  string
+	InvitationID string
 	NodeID       string
 	Status       string
 	AgentID      string
 	CredentialID string
 }
 
+// EnrollmentInstallation is a secret-free view of one Fleet credential binding.
+// Status is ACTIVE or REVOKED; the Supervisor UID remains Fleet-owned and is
+// intentionally omitted from Core's Node projection.
+type EnrollmentInstallation struct {
+	InstallationID string
+	NodeID         string
+	Status         string
+}
+
 // Validate checks the non-secret fields required to persist an invitation.
 func (i EnrollmentInvitation) Validate() error {
 	for _, value := range []string{
-		i.OperationID, i.IdempotencyHash, i.Fingerprint, i.ActorID,
+		i.OperationID, i.CorePrincipalID, i.IdempotencyHash, i.Fingerprint, i.ActorID,
 		i.NodeID, i.InvitationID, i.Secret,
 	} {
 		if value == "" || strings.TrimSpace(value) != value {

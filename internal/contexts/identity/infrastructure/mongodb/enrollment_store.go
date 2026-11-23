@@ -27,11 +27,12 @@ const (
 	gateOperationsName        = "identity_enrollment_gate_operations"
 )
 
-var errEnrollmentStoreUnavailable = errors.New("enrollment persistence unavailable")
+var errEnrollmentStoreUnavailable = domain.ErrEnrollmentUnavailable
 
 type invitationRecord struct {
 	ID              string    `bson:"_id"`
 	OperationID     string    `bson:"operation_id"`
+	CorePrincipalID string    `bson:"core_principal_id"`
 	IdempotencyHash string    `bson:"idempotency_hash"`
 	Fingerprint     string    `bson:"fingerprint"`
 	ActorID         string    `bson:"actor_id"`
@@ -127,7 +128,7 @@ func EnsureEnrollmentIndexes(ctx context.Context, database *mongo.Database) erro
 	}
 	_, err := database.Collection(invitationsCollectionName).Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "operation_id", Value: 1}}, Options: options.Index().SetName("operation_id_1").SetUnique(true)},
-		{Keys: bson.D{{Key: "actor_id", Value: 1}, {Key: "idempotency_hash", Value: 1}}, Options: options.Index().SetName("actor_id_1_idempotency_hash_1").SetUnique(true)},
+		{Keys: bson.D{{Key: "core_principal_id", Value: 1}, {Key: "idempotency_hash", Value: 1}}, Options: options.Index().SetName("core_principal_id_1_idempotency_hash_1").SetUnique(true).SetPartialFilterExpression(bson.M{"core_principal_id": bson.M{"$type": "string"}})},
 		{Keys: bson.D{{Key: "invitation_id", Value: 1}}, Options: options.Index().SetName("invitation_id_1").SetUnique(true)},
 		{Keys: bson.D{{Key: "token_hash", Value: 1}}, Options: options.Index().SetName("token_hash_1").SetUnique(true)},
 	})
@@ -155,7 +156,48 @@ func EnsureEnrollmentIndexes(ctx context.Context, database *mongo.Database) erro
 	if err != nil {
 		return fmt.Errorf("reconcile enrollment gate operation indexes: %w", err)
 	}
+	if err := dropLegacyActorIdempotencyIndex(ctx, database.Collection(invitationsCollectionName)); err != nil {
+		return fmt.Errorf("remove legacy actor-scoped invitation idempotency index: %w", err)
+	}
 	return nil
+}
+
+func dropLegacyActorIdempotencyIndex(ctx context.Context, collection *mongo.Collection) error {
+	indexes := collection.Indexes()
+	exists, err := hasIndex(ctx, indexes, "actor_id_1_idempotency_hash_1")
+	if err != nil || !exists {
+		return err
+	}
+	if err := indexes.DropOne(ctx, "actor_id_1_idempotency_hash_1"); err != nil {
+		stillExists, inspectErr := hasIndex(ctx, indexes, "actor_id_1_idempotency_hash_1")
+		if inspectErr == nil && !stillExists {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func hasIndex(ctx context.Context, indexes mongo.IndexView, name string) (bool, error) {
+	cursor, err := indexes.List(ctx)
+	if err != nil {
+		return false, err
+	}
+	var specifications []struct {
+		Name string `bson:"name"`
+	}
+	if err := cursor.All(ctx, &specifications); err != nil {
+		return false, err
+	}
+	if err := cursor.Close(ctx); err != nil {
+		return false, err
+	}
+	for _, specification := range specifications {
+		if specification.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // VerifyTransactionSupport fails startup when the Mongo deployment cannot
@@ -184,6 +226,7 @@ func (s *EnrollmentStore) CreateInvitation(ctx context.Context, invitation domai
 	}
 	var stored invitationRecord
 	var storedSecret string
+	replayed := false
 	session, err := s.client.StartSession()
 	if err != nil {
 		return domain.EnrollmentInvitation{}, errEnrollmentStoreUnavailable
@@ -191,7 +234,7 @@ func (s *EnrollmentStore) CreateInvitation(ctx context.Context, invitation domai
 	defer session.EndSession(ctx)
 	_, err = session.WithTransaction(ctx, func(txCtx context.Context) (any, error) {
 		collection := s.database.Collection(invitationsCollectionName)
-		filter := bson.M{"actor_id": invitation.ActorID, "idempotency_hash": invitation.IdempotencyHash}
+		filter := bson.M{"core_principal_id": invitation.CorePrincipalID, "idempotency_hash": invitation.IdempotencyHash}
 		if findErr := collection.FindOne(txCtx, filter).Decode(&stored); findErr == nil {
 			if stored.OperationID != invitation.OperationID || stored.Fingerprint != invitation.Fingerprint {
 				return nil, domain.ErrEnrollmentConflict
@@ -201,6 +244,7 @@ func (s *EnrollmentStore) CreateInvitation(ctx context.Context, invitation domai
 				return nil, domain.ErrInvitationRejected
 			}
 			storedSecret = escrow.Ciphertext
+			replayed = true
 			return stored, nil
 		} else if !errors.Is(findErr, mongo.ErrNoDocuments) {
 			return nil, findErr
@@ -210,6 +254,7 @@ func (s *EnrollmentStore) CreateInvitation(ctx context.Context, invitation domai
 		}
 		stored = invitationRecord{
 			ID: invitation.OperationID, OperationID: invitation.OperationID,
+			CorePrincipalID: invitation.CorePrincipalID,
 			IdempotencyHash: invitation.IdempotencyHash, Fingerprint: invitation.Fingerprint,
 			ActorID: invitation.ActorID, NodeID: invitation.NodeID, InvitationID: invitation.InvitationID,
 			TokenHash: tokenDigest(invitation.Secret),
@@ -249,6 +294,7 @@ func (s *EnrollmentStore) CreateInvitation(ctx context.Context, invitation domai
 	invitation.Secret = string(secret)
 	invitation.Status = domain.EnrollmentInvitationStatus(stored.Status)
 	invitation.ExpiresAt = stored.ExpiresAt
+	invitation.Replayed = replayed
 	return invitation, nil
 }
 
@@ -283,16 +329,48 @@ func (s *EnrollmentStore) Enroll(ctx context.Context, attempt domain.EnrollmentA
 		}
 		invites := s.database.Collection(invitationsCollectionName)
 		var invite invitationRecord
-		if findErr := invites.FindOne(txCtx, bson.M{"token_hash": attempt.InvitationTokenHash, "status": string(domain.InvitationPending), "expires_at": bson.M{"$gt": s.clock()}}).Decode(&invite); findErr != nil {
+		now := s.clock()
+		pendingInvitation := bson.M{"token_hash": attempt.InvitationTokenHash, "status": string(domain.InvitationPending)}
+		activeInvitation := bson.M{"token_hash": attempt.InvitationTokenHash, "status": string(domain.InvitationPending), "expires_at": bson.M{"$gt": now}}
+		if findErr := invites.FindOne(txCtx, activeInvitation).Decode(&invite); errors.Is(findErr, mongo.ErrNoDocuments) {
+			var expired invitationRecord
+			if expiredErr := invites.FindOne(txCtx, pendingInvitation).Decode(&expired); errors.Is(expiredErr, mongo.ErrNoDocuments) {
+				return nil, domain.ErrInvitationRejected
+			} else if expiredErr != nil {
+				return nil, expiredErr
+			}
+			if !expired.ExpiresAt.After(now) {
+				return nil, domain.ErrInvitationExpired
+			}
 			return nil, domain.ErrInvitationRejected
+		} else if findErr != nil {
+			return nil, findErr
 		}
 		if err := s.touchOpenGate(txCtx, invite.NodeID, attempt.AgentID); err != nil {
 			return nil, err
 		}
-		if _, updateErr := invites.UpdateOne(txCtx, bson.M{"_id": invite.ID, "status": string(domain.InvitationPending), "expires_at": bson.M{"$gt": s.clock()}}, bson.M{"$set": bson.M{
+		updateResult, updateErr := invites.UpdateOne(txCtx, bson.M{"_id": invite.ID, "status": string(domain.InvitationPending), "expires_at": bson.M{"$gt": s.clock()}}, bson.M{"$set": bson.M{
 			"status": string(domain.InvitationRedeemed), "agent_id": attempt.AgentID, "credential_id": result.CredentialID,
-		}}); updateErr != nil {
+		}})
+		if updateErr != nil {
 			return nil, updateErr
+		}
+		if updateResult.MatchedCount != 1 {
+			var current invitationRecord
+			lookupErr := invites.FindOne(txCtx, bson.M{"_id": invite.ID}).Decode(&current)
+			if errors.Is(lookupErr, mongo.ErrNoDocuments) {
+				return nil, domain.ErrInvitationRejected
+			}
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			if current.Status != string(domain.InvitationPending) {
+				return nil, domain.ErrInvitationRejected
+			}
+			if !current.ExpiresAt.After(s.clock()) {
+				return nil, domain.ErrInvitationExpired
+			}
+			return nil, domain.ErrEnrollmentConflict
 		}
 		if _, deleteErr := s.database.Collection(invitationEscrowName).DeleteOne(txCtx, bson.M{"_id": invite.InvitationID}); deleteErr != nil {
 			return nil, deleteErr
@@ -320,7 +398,7 @@ func (s *EnrollmentStore) Enroll(ctx context.Context, attempt domain.EnrollmentA
 		return result, nil
 	})
 	if err != nil {
-		if errors.Is(err, domain.ErrEnrollmentConflict) || errors.Is(err, domain.ErrInvitationRejected) || errors.Is(err, domain.ErrEnrollmentRecoveryRejected) {
+		if errors.Is(err, domain.ErrEnrollmentConflict) || errors.Is(err, domain.ErrInvitationRejected) || errors.Is(err, domain.ErrInvitationExpired) || errors.Is(err, domain.ErrEnrollmentRecoveryRejected) {
 			return domain.EnrollmentResult{}, err
 		}
 		return domain.EnrollmentResult{}, errEnrollmentStoreUnavailable

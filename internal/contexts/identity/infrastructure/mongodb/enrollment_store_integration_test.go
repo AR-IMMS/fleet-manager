@@ -12,6 +12,8 @@ import (
 	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/application"
 	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	driver "go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
@@ -35,7 +37,7 @@ func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
 		RecoveryTTL: 24 * time.Hour, OpAMPEndpoint: "wss://fleet.example.test/v1/opamp",
 	}
 	invitation, err := service.CreateInvitation(ctx, application.CreateInvitationCommand{
-		OperationID: "operation-enrollment-1", IdempotencyKey: "idempotency-enrollment-1",
+		OperationID: "operation-enrollment-1", CorePrincipalID: "core-service", IdempotencyKey: "idempotency-enrollment-1",
 		ActorID: "core-service", NodeID: "node-enrollment-1",
 	})
 	if err != nil {
@@ -77,7 +79,7 @@ func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
 	if err != nil {
 		t.Fatal("read secret-free enrollment status", err)
 	}
-	if status.Status != "ENROLLED" || status.AgentID != command.AgentID || status.CredentialID != first.CredentialID {
+	if status.Status != "EXCHANGED" || status.AgentID != command.AgentID || status.CredentialID != first.CredentialID || status.InvitationID != invitation.InvitationID {
 		t.Fatalf("Core status does not reflect enrolled identity: %+v", status)
 	}
 	if status.CredentialID == first.Credential {
@@ -88,7 +90,7 @@ func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
 		t.Fatalf("recovery must fail after escrow expiry, got %v", err)
 	}
 	status, err = restarted.GetStatus(ctx, invitation.OperationID)
-	if err != nil || status.Status != "ENROLLED" {
+	if err != nil || status.Status != "EXCHANGED" {
 		t.Fatalf("secret-free enrollment status should survive escrow expiry: status=%+v err=%v", status, err)
 	}
 	var persistedInvitation bson.M
@@ -109,7 +111,7 @@ func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
 		t.Fatal("raw Fleet credential must not appear in its Mongo record")
 	}
 	secondInvitation, err := service.CreateInvitation(ctx, application.CreateInvitationCommand{
-		OperationID: "operation-second-agent", IdempotencyKey: "idempotency-second-agent",
+		OperationID: "operation-second-agent", CorePrincipalID: "core-service", IdempotencyKey: "idempotency-second-agent",
 		ActorID: "core-service", NodeID: "node-enrollment-1",
 	})
 	if err != nil {
@@ -143,10 +145,224 @@ func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
 		t.Fatalf("changed request for same gate operation should conflict, got %v", err)
 	}
 	if _, err := service.CreateInvitation(ctx, application.CreateInvitationCommand{
-		OperationID: "operation-after-close", IdempotencyKey: "idempotency-after-close",
+		OperationID: "operation-after-close", CorePrincipalID: "core-service", IdempotencyKey: "idempotency-after-close",
 		ActorID: "core-service", NodeID: "node-enrollment-1",
 	}); !errors.Is(err, domain.ErrInvitationRejected) {
 		t.Fatalf("closed gate should reject new invitations, got %v", err)
+	}
+}
+
+func TestExpiredInvitationExchangeReturnsExpiredError(t *testing.T) {
+	ctx, database := newMigrationTestDatabase(t)
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal("apply enrollment schema migration", err)
+	}
+	if err := EnsureIndexes(ctx, database); err != nil {
+		t.Fatal("reconcile enrollment indexes", err)
+	}
+	store, err := NewEnrollmentStore(database, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal("create enrollment store", err)
+	}
+	service := application.EnrollmentService{
+		Store: store, DefaultInviteTTL: time.Minute, MaximumInviteTTL: time.Hour,
+		RecoveryTTL: 24 * time.Hour, OpAMPEndpoint: "wss://fleet.example.test/v1/opamp",
+	}
+	invitation, err := service.CreateInvitation(ctx, application.CreateInvitationCommand{
+		OperationID: "operation-expired-invitation", CorePrincipalID: "core-service",
+		IdempotencyKey: "idempotency-expired-invitation", ActorID: "core-service", NodeID: "node-expired-invitation",
+	})
+	if err != nil {
+		t.Fatal("create invitation", err)
+	}
+	store.clock = func() time.Time { return invitation.ExpiresAt.Add(time.Second) }
+	_, err = service.Exchange(ctx, application.ExchangeInvitationCommand{
+		AttemptID: "attempt-expired-invitation", AgentID: "agent-expired-invitation",
+		InvitationToken: invitation.Secret,
+		RecoveryProof:   "recovery-proof-expired-invitation-012345678901234567890123",
+	})
+	if !errors.Is(err, domain.ErrInvitationExpired) {
+		t.Fatalf("expired invitation should return the expired error, got %v", err)
+	}
+}
+
+func TestInvitationExpiringBeforeConditionalConsumeDoesNotEnroll(t *testing.T) {
+	ctx, database := newMigrationTestDatabase(t)
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal("apply enrollment schema migration", err)
+	}
+	if err := EnsureIndexes(ctx, database); err != nil {
+		t.Fatal("reconcile enrollment indexes", err)
+	}
+	store, err := NewEnrollmentStore(database, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal("create enrollment store", err)
+	}
+	service := application.EnrollmentService{
+		Store: store, DefaultInviteTTL: time.Minute, MaximumInviteTTL: time.Hour,
+		RecoveryTTL: 24 * time.Hour, OpAMPEndpoint: "wss://fleet.example.test/v1/opamp",
+	}
+	invitation, err := service.CreateInvitation(ctx, application.CreateInvitationCommand{
+		OperationID: "operation-expiry-race", CorePrincipalID: "core-service",
+		IdempotencyKey: "idempotency-expiry-race", ActorID: "core-service", NodeID: "node-expiry-race",
+	})
+	if err != nil {
+		t.Fatal("create invitation", err)
+	}
+	clockCalls := 0
+	store.clock = func() time.Time {
+		clockCalls++
+		if clockCalls >= 3 {
+			return invitation.ExpiresAt.Add(time.Second)
+		}
+		return invitation.ExpiresAt.Add(-time.Second)
+	}
+	_, err = service.Exchange(ctx, application.ExchangeInvitationCommand{
+		AttemptID: "attempt-expiry-race", AgentID: "agent-expiry-race",
+		InvitationToken: invitation.Secret,
+		RecoveryProof:   "recovery-proof-expiry-race-012345678901234567890123",
+	})
+	if !errors.Is(err, domain.ErrInvitationExpired) {
+		t.Fatalf("invitation expiring before conditional consume should be rejected as expired, got %v", err)
+	}
+	if clockCalls < 3 {
+		t.Fatalf("test did not advance the clock before conditional consume: calls=%d", clockCalls)
+	}
+	if count, err := database.Collection(collectionName).CountDocuments(ctx, bson.M{"agent_id": "agent-expiry-race"}); err != nil || count != 0 {
+		t.Fatalf("expired invitation must not create an identity credential: count=%d err=%v", count, err)
+	}
+	if count, err := database.Collection(attemptsCollectionName).CountDocuments(ctx, bson.M{"attempt_id": "attempt-expiry-race"}); err != nil || count != 0 {
+		t.Fatalf("expired invitation must not persist an exchange attempt: count=%d err=%v", count, err)
+	}
+	var persisted invitationRecord
+	if err := database.Collection(invitationsCollectionName).FindOne(ctx, bson.M{"operation_id": invitation.OperationID}).Decode(&persisted); err != nil {
+		t.Fatal("read invitation after rejected exchange", err)
+	}
+	if persisted.Status != string(domain.InvitationPending) {
+		t.Fatalf("rejected exchange must leave invitation pending: status=%q", persisted.Status)
+	}
+	if count, err := database.Collection(invitationEscrowName).CountDocuments(ctx, bson.M{"_id": invitation.InvitationID}); err != nil || count != 1 {
+		t.Fatalf("rejected exchange must retain invitation escrow: count=%d err=%v", count, err)
+	}
+}
+
+func TestInstallationLookupsAreSecretFreeAndReflectRevocation(t *testing.T) {
+	ctx, database := newMigrationTestDatabase(t)
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal("apply identity schema migration", err)
+	}
+	if err := EnsureIndexes(ctx, database); err != nil {
+		t.Fatal("reconcile identity indexes", err)
+	}
+	store, err := NewEnrollmentStore(database, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal("create enrollment store", err)
+	}
+	service := application.EnrollmentService{
+		Store: store, DefaultInviteTTL: 10 * time.Minute, MaximumInviteTTL: time.Hour,
+		RecoveryTTL: 24 * time.Hour, OpAMPEndpoint: "wss://fleet.example.test/v1/opamp",
+	}
+	invitation, err := service.CreateInvitation(ctx, application.CreateInvitationCommand{
+		OperationID: "operation-installation-read", CorePrincipalID: "core-service", IdempotencyKey: "idempotency-installation-read",
+		ActorID: "core-service", NodeID: "node-installation-read",
+	})
+	if err != nil {
+		t.Fatal("create invitation", err)
+	}
+	result, err := service.Exchange(ctx, application.ExchangeInvitationCommand{
+		AttemptID: "attempt-installation-read", AgentID: "agent-installation-read",
+		InvitationToken: invitation.Secret, RecoveryProof: "recovery-proof-installation-read-012345678901234567890",
+	})
+	if err != nil {
+		t.Fatal("exchange invitation", err)
+	}
+	byID, err := service.GetInstallationByAgentID(ctx, result.AgentID)
+	if err != nil {
+		t.Fatal("get installation by agent ID", err)
+	}
+	byNode, err := service.GetActiveInstallationByNode(ctx, result.NodeID)
+	if err != nil {
+		t.Fatal("get active installation by Node ID", err)
+	}
+	if byID.InstallationID != result.AgentID || byID.NodeID != result.NodeID || byID.Status != "ACTIVE" || byNode != byID {
+		t.Fatalf("installation lookup returned inconsistent binding: byID=%+v byNode=%+v", byID, byNode)
+	}
+	encoded, err := bson.Marshal(byID)
+	if err != nil {
+		t.Fatal("marshal secret-free installation", err)
+	}
+	if strings.Contains(string(encoded), result.Credential) || strings.Contains(string(encoded), invitation.Secret) {
+		t.Fatal("installation lookup value contains a credential or invitation secret")
+	}
+	if err := store.verifier.Revoke(ctx, result.CredentialID); err != nil {
+		t.Fatal("revoke credential", err)
+	}
+	revoked, err := service.GetInstallationByAgentID(ctx, result.AgentID)
+	if err != nil || revoked.Status != "REVOKED" {
+		t.Fatalf("installation lookup should reflect revocation: installation=%+v err=%v", revoked, err)
+	}
+	if _, err := service.GetActiveInstallationByNode(ctx, result.NodeID); !errors.Is(err, domain.ErrEnrollmentNotFound) {
+		t.Fatalf("active Node lookup should exclude revoked installation, got %v", err)
+	}
+}
+
+func TestInvitationIdempotencyUsesCorePrincipalNotForwardedActor(t *testing.T) {
+	ctx, database := newMigrationTestDatabase(t)
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal("apply identity schema migration", err)
+	}
+	legacyIndex := "actor_id_1_idempotency_hash_1"
+	if _, err := database.Collection(invitationsCollectionName).Indexes().CreateOne(ctx, driver.IndexModel{
+		Keys:    bson.D{{Key: "actor_id", Value: 1}, {Key: "idempotency_hash", Value: 1}},
+		Options: options.Index().SetName(legacyIndex).SetUnique(true),
+	}); err != nil {
+		t.Fatal("create legacy actor-scoped idempotency index", err)
+	}
+	if err := EnsureIndexes(ctx, database); err != nil {
+		t.Fatal("reconcile identity indexes", err)
+	}
+	assertIndexNames(t, ctx, database.Collection(invitationsCollectionName), []string{
+		"_id_", "core_principal_id_1_idempotency_hash_1", "invitation_id_1", "operation_id_1", "token_hash_1",
+	})
+	store, err := NewEnrollmentStore(database, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal("create enrollment store", err)
+	}
+	service := application.EnrollmentService{
+		Store: store, DefaultInviteTTL: 10 * time.Minute, MaximumInviteTTL: time.Hour,
+		RecoveryTTL: 24 * time.Hour, OpAMPEndpoint: "wss://fleet.example.test/v1/opamp",
+	}
+	create := func(principal, actor, operationID, nodeID string) (application.InvitationResult, error) {
+		return service.CreateInvitation(ctx, application.CreateInvitationCommand{
+			OperationID: operationID, CorePrincipalID: principal, IdempotencyKey: "shared-core-idempotency-key-12345",
+			ActorID: actor, NodeID: nodeID,
+		})
+	}
+	first, err := create("core-service-a", "human-a", "operation-core-a", "node-core-a")
+	if err != nil {
+		t.Fatal("create first invitation", err)
+	}
+	actorChanged, err := create("core-service-a", "human-b", "operation-core-a", "node-core-a")
+	if err != nil || !actorChanged.Replayed || actorChanged.Secret != first.Secret {
+		t.Fatalf("same Core principal/key with changed forwarded actor must replay original: replay=%+v err=%v", actorChanged, err)
+	}
+	otherPrincipal, err := create("core-service-b", "human-a", "operation-core-b", "node-core-b")
+	if err != nil || otherPrincipal.Replayed || otherPrincipal.Secret == first.Secret {
+		t.Fatalf("same key under another authenticated Core identity must be independent: result=%+v err=%v", otherPrincipal, err)
+	}
+	var firstRecord invitationRecord
+	if err := database.Collection(invitationsCollectionName).FindOne(ctx, bson.M{"operation_id": "operation-core-a"}).Decode(&firstRecord); err != nil {
+		t.Fatal("read first invitation record", err)
+	}
+	var otherPrincipalRecord invitationRecord
+	if err := database.Collection(invitationsCollectionName).FindOne(ctx, bson.M{"operation_id": "operation-core-b"}).Decode(&otherPrincipalRecord); err != nil {
+		t.Fatal("read other principal invitation record", err)
+	}
+	if firstRecord.ActorID != "human-a" {
+		t.Fatalf("replay must not overwrite original audit actor: got %q", firstRecord.ActorID)
+	}
+	if firstRecord.CorePrincipalID == otherPrincipalRecord.CorePrincipalID || otherPrincipalRecord.ActorID != firstRecord.ActorID {
+		t.Fatalf("same actor/key invitations should persist under separate Core principals: first=%+v other=%+v", firstRecord, otherPrincipalRecord)
 	}
 }
 
@@ -167,7 +383,7 @@ func TestConcurrentExchangeReplaysOneCredential(t *testing.T) {
 		RecoveryTTL: 24 * time.Hour, OpAMPEndpoint: "wss://fleet.example.test/v1/opamp",
 	}
 	command := application.CreateInvitationCommand{
-		OperationID: "operation-concurrent", IdempotencyKey: "idempotency-concurrent",
+		OperationID: "operation-concurrent", CorePrincipalID: "core-service", IdempotencyKey: "idempotency-concurrent",
 		ActorID: "core-service", NodeID: "node-concurrent",
 	}
 	var invitations [2]application.InvitationResult
@@ -236,7 +452,7 @@ func TestEnrollmentGateCloseRacingExchangeReportsWinningBinding(t *testing.T) {
 		RecoveryTTL: 24 * time.Hour, OpAMPEndpoint: "wss://fleet.example.test/v1/opamp",
 	}
 	invitation, err := service.CreateInvitation(ctx, application.CreateInvitationCommand{
-		OperationID: "operation-race", IdempotencyKey: "idempotency-race", ActorID: "core-service", NodeID: "node-race",
+		OperationID: "operation-race", CorePrincipalID: "core-service", IdempotencyKey: "idempotency-race", ActorID: "core-service", NodeID: "node-race",
 	})
 	if err != nil {
 		t.Fatal("create invitation before race", err)

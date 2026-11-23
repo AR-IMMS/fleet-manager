@@ -21,11 +21,12 @@ func TestCreateInvitationReplaysSecretForIdenticalOperation(t *testing.T) {
 		RecoveryTTL:      24 * time.Hour,
 	}
 	command := CreateInvitationCommand{
-		OperationID:    "operation-1",
-		IdempotencyKey: "idempotency-1",
-		ActorID:        "core-user-1",
-		NodeID:         "node-1",
-		RequestedTTL:   5 * time.Minute,
+		OperationID:     "operation-1",
+		CorePrincipalID: "fleet-core-service",
+		IdempotencyKey:  "idempotency-1",
+		ActorID:         "core-user-1",
+		NodeID:          "node-1",
+		RequestedTTL:    5 * time.Minute,
 	}
 
 	first, err := service.CreateInvitation(context.Background(), command)
@@ -41,6 +42,9 @@ func TestCreateInvitationReplaysSecretForIdenticalOperation(t *testing.T) {
 	}
 	if second.InvitationID != first.InvitationID || second.Secret != first.Secret {
 		t.Fatal("same operation and request must replay the original invitation result")
+	}
+	if first.Replayed || !second.Replayed {
+		t.Fatalf("replay state should distinguish create from retry: first=%v second=%v", first.Replayed, second.Replayed)
 	}
 	if first.ExpiresAt != second.ExpiresAt {
 		t.Fatal("replayed invitation must preserve its original expiry")
@@ -58,7 +62,7 @@ func TestCreateInvitationRejectsChangedRequestForSameOperation(t *testing.T) {
 		RecoveryTTL:      24 * time.Hour,
 	}
 	command := CreateInvitationCommand{
-		OperationID: "operation-2", IdempotencyKey: "idempotency-2",
+		OperationID: "operation-2", CorePrincipalID: "fleet-core-service", IdempotencyKey: "idempotency-2",
 		ActorID: "core-user-1", NodeID: "node-1", RequestedTTL: 5 * time.Minute,
 	}
 	if _, err := service.CreateInvitation(context.Background(), command); err != nil {
@@ -67,6 +71,21 @@ func TestCreateInvitationRejectsChangedRequestForSameOperation(t *testing.T) {
 	command.NodeID = "node-2"
 	if _, err := service.CreateInvitation(context.Background(), command); !errors.Is(err, domain.ErrEnrollmentConflict) {
 		t.Fatalf("changed request should conflict, got %v", err)
+	}
+}
+
+func TestCreateInvitationRejectsLifetimeBelowContractMinimum(t *testing.T) {
+	store := &memoryEnrollmentStore{invitations: make(map[string]domain.EnrollmentInvitation)}
+	service := EnrollmentService{
+		Store: store, DefaultInviteTTL: 10 * time.Minute, MaximumInviteTTL: time.Hour,
+		RecoveryTTL: 24 * time.Hour,
+	}
+	_, err := service.CreateInvitation(context.Background(), CreateInvitationCommand{
+		OperationID: "operation-short-ttl", CorePrincipalID: "fleet-core-service", IdempotencyKey: "idempotency-short-ttl",
+		ActorID: "core-user", NodeID: "node-short-ttl", RequestedTTL: time.Second * 59,
+	})
+	if err == nil {
+		t.Fatal("invitation lifetime below the 60-second contract minimum should fail")
 	}
 }
 
@@ -154,6 +173,7 @@ func (s *memoryEnrollmentStore) CreateInvitation(
 		if current.Fingerprint != invitation.Fingerprint || current.IdempotencyHash != invitation.IdempotencyHash {
 			return domain.EnrollmentInvitation{}, domain.ErrEnrollmentConflict
 		}
+		current.Replayed = true
 		return current, nil
 	}
 	s.invitations[invitation.OperationID] = invitation
@@ -198,4 +218,12 @@ func (s *memoryEnrollmentStore) ChangeGate(
 
 func (*memoryEnrollmentStore) GetStatus(_ context.Context, operationID string) (domain.EnrollmentStatus, error) {
 	return domain.EnrollmentStatus{OperationID: operationID, Status: string(domain.InvitationPending)}, nil
+}
+
+func (*memoryEnrollmentStore) GetInstallationByAgentID(_ context.Context, agentID string) (domain.EnrollmentInstallation, error) {
+	return domain.EnrollmentInstallation{InstallationID: agentID, NodeID: "node-1", Status: "ACTIVE"}, nil
+}
+
+func (*memoryEnrollmentStore) GetActiveInstallationByNode(_ context.Context, nodeID string) (domain.EnrollmentInstallation, error) {
+	return domain.EnrollmentInstallation{InstallationID: "agent-1", NodeID: nodeID, Status: "ACTIVE"}, nil
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // Recover returns the same credential only for the original attempt and proof
@@ -43,17 +44,60 @@ func (s *EnrollmentStore) GetStatus(ctx context.Context, operationID string) (do
 		return domain.EnrollmentStatus{}, errEnrollmentStoreUnavailable
 	}
 	status := domain.EnrollmentStatus{
-		OperationID: operationID, NodeID: invitation.NodeID, Status: invitation.Status,
+		OperationID: operationID, InvitationID: invitation.InvitationID, NodeID: invitation.NodeID, Status: invitation.Status,
 	}
 	if invitation.Status == string(domain.InvitationPending) && !invitation.ExpiresAt.After(s.clock()) {
 		status.Status = string(domain.InvitationExpired)
 	}
 	if invitation.Status == string(domain.InvitationRedeemed) {
-		status.Status = "ENROLLED"
+		status.Status = "EXCHANGED"
 		status.AgentID = invitation.AgentID
 		status.CredentialID = invitation.CredentialID
 	}
 	return status, nil
+}
+
+// GetInstallationByAgentID returns only identifiers and active/revoked state.
+func (s *EnrollmentStore) GetInstallationByAgentID(ctx context.Context, agentID string) (domain.EnrollmentInstallation, error) {
+	var found record
+	err := s.database.Collection(collectionName).FindOne(ctx, bson.M{"agent_id": agentID}).Decode(&found)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return domain.EnrollmentInstallation{}, domain.ErrEnrollmentNotFound
+	}
+	if err != nil {
+		return domain.EnrollmentInstallation{}, errEnrollmentStoreUnavailable
+	}
+	if found.Status != "ACTIVE" && found.Status != "REVOKED" {
+		return domain.EnrollmentInstallation{}, errEnrollmentStoreUnavailable
+	}
+	return domain.EnrollmentInstallation{
+		InstallationID: found.AgentID, NodeID: found.NodeID, Status: found.Status,
+	}, nil
+}
+
+// GetActiveInstallationByNode returns the sole active installation for a Node.
+func (s *EnrollmentStore) GetActiveInstallationByNode(ctx context.Context, nodeID string) (domain.EnrollmentInstallation, error) {
+	cursor, err := s.database.Collection(collectionName).Find(ctx, bson.M{"node_id": nodeID, "status": "ACTIVE"}, options.Find().SetLimit(2))
+	if err != nil {
+		return domain.EnrollmentInstallation{}, errEnrollmentStoreUnavailable
+	}
+	var matches []record
+	allErr := cursor.All(ctx, &matches)
+	closeErr := cursor.Close(ctx)
+	if allErr != nil || closeErr != nil {
+		return domain.EnrollmentInstallation{}, errEnrollmentStoreUnavailable
+	}
+	switch len(matches) {
+	case 0:
+		return domain.EnrollmentInstallation{}, domain.ErrEnrollmentNotFound
+	case 1:
+		found := matches[0]
+		return domain.EnrollmentInstallation{
+			InstallationID: found.AgentID, NodeID: found.NodeID, Status: found.Status,
+		}, nil
+	default:
+		return domain.EnrollmentInstallation{}, domain.ErrEnrollmentConflict
+	}
 }
 
 func (s *EnrollmentStore) seal(plaintext, associatedData []byte) (string, error) {

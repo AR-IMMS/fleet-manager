@@ -53,9 +53,10 @@ func TestApplicationRunStartsAuthenticatedOpAMPAndShutsDown(t *testing.T) {
 	}
 	agentID := "supervisor-enrolled-agent-" + uuid.NewString()
 	invitation, err := enrollment.CreateInvitation(ctx, identityapp.CreateInvitationCommand{
-		OperationID:    "supervisor-enrollment-" + uuid.NewString(),
-		IdempotencyKey: "supervisor-idempotency-" + uuid.NewString(),
-		ActorID:        "core-service", NodeID: "supervisor-node-" + uuid.NewString(),
+		OperationID:     "supervisor-enrollment-" + uuid.NewString(),
+		CorePrincipalID: "fleet-application-integration",
+		IdempotencyKey:  "supervisor-idempotency-" + uuid.NewString(),
+		ActorID:         "core-service", NodeID: "supervisor-node-" + uuid.NewString(),
 	})
 	if err != nil {
 		t.Fatal("create test enrollment invitation", err)

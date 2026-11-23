@@ -22,15 +22,18 @@ type EnrollmentStore interface {
 	Recover(context.Context, string, string, string) (domain.EnrollmentResult, error)
 	ChangeGate(context.Context, ChangeEnrollmentGateCommand) (domain.EnrollmentGate, error)
 	GetStatus(context.Context, string) (domain.EnrollmentStatus, error)
+	GetInstallationByAgentID(context.Context, string) (domain.EnrollmentInstallation, error)
+	GetActiveInstallationByNode(context.Context, string) (domain.EnrollmentInstallation, error)
 }
 
 // CreateInvitationCommand contains Core's stable operation and idempotency inputs.
 type CreateInvitationCommand struct {
-	OperationID    string
-	IdempotencyKey string
-	ActorID        string
-	NodeID         string
-	RequestedTTL   time.Duration
+	OperationID     string
+	CorePrincipalID string
+	IdempotencyKey  string
+	ActorID         string
+	NodeID          string
+	RequestedTTL    time.Duration
 }
 
 // InvitationResult is the canonical response for a pending invitation operation.
@@ -41,6 +44,7 @@ type InvitationResult struct {
 	Secret       string
 	Status       domain.EnrollmentInvitationStatus
 	ExpiresAt    time.Time
+	Replayed     bool
 }
 
 // ExchangeInvitationCommand contains the Agent's stable attempt and recovery proof.
@@ -172,6 +176,28 @@ func (s EnrollmentService) GetStatus(ctx context.Context, operationID string) (d
 	return s.Store.GetStatus(ctx, operationID)
 }
 
+// GetInstallationByAgentID returns a secret-free installation and credential state.
+func (s EnrollmentService) GetInstallationByAgentID(ctx context.Context, agentID string) (domain.EnrollmentInstallation, error) {
+	if err := s.validate(); err != nil {
+		return domain.EnrollmentInstallation{}, err
+	}
+	if ctx == nil || validateEnrollmentInput(agentID, "Agent ID") != nil {
+		return domain.EnrollmentInstallation{}, fmt.Errorf("enrollment Agent ID is invalid")
+	}
+	return s.Store.GetInstallationByAgentID(ctx, agentID)
+}
+
+// GetActiveInstallationByNode returns the active secret-free installation for a Node.
+func (s EnrollmentService) GetActiveInstallationByNode(ctx context.Context, nodeID string) (domain.EnrollmentInstallation, error) {
+	if err := s.validate(); err != nil {
+		return domain.EnrollmentInstallation{}, err
+	}
+	if ctx == nil || validateEnrollmentInput(nodeID, "Node ID") != nil {
+		return domain.EnrollmentInstallation{}, fmt.Errorf("enrollment Node ID is invalid")
+	}
+	return s.Store.GetActiveInstallationByNode(ctx, nodeID)
+}
+
 // CreateInvitation creates or idempotently replays one preapproved invitation.
 func (s EnrollmentService) CreateInvitation(
 	ctx context.Context,
@@ -184,10 +210,11 @@ func (s EnrollmentService) CreateInvitation(
 		return InvitationResult{}, fmt.Errorf("enrollment request context is required")
 	}
 	for name, value := range map[string]string{
-		"operation ID":    command.OperationID,
-		"idempotency key": command.IdempotencyKey,
-		"actor ID":        command.ActorID,
-		"Node ID":         command.NodeID,
+		"Core principal ID": command.CorePrincipalID,
+		"operation ID":      command.OperationID,
+		"idempotency key":   command.IdempotencyKey,
+		"actor ID":          command.ActorID,
+		"Node ID":           command.NodeID,
 	} {
 		if value == "" || strings.TrimSpace(value) != value {
 			return InvitationResult{}, fmt.Errorf("enrollment %s is invalid", name)
@@ -198,7 +225,7 @@ func (s EnrollmentService) CreateInvitation(
 	if ttl == 0 {
 		ttl = s.DefaultInviteTTL
 	}
-	if ttl <= 0 || ttl > s.MaximumInviteTTL {
+	if ttl < time.Minute || ttl > s.MaximumInviteTTL {
 		return InvitationResult{}, fmt.Errorf("requested invitation lifetime is outside the allowed range")
 	}
 
@@ -212,7 +239,8 @@ func (s EnrollmentService) CreateInvitation(
 	}
 	invitation := domain.EnrollmentInvitation{
 		OperationID:     command.OperationID,
-		IdempotencyHash: digest(command.IdempotencyKey),
+		CorePrincipalID: command.CorePrincipalID,
+		IdempotencyHash: digest(command.CorePrincipalID + "\x00" + command.IdempotencyKey),
 		Fingerprint:     fingerprint(command, ttl),
 		ActorID:         command.ActorID,
 		NodeID:          command.NodeID,
@@ -232,6 +260,7 @@ func (s EnrollmentService) CreateInvitation(
 		Secret:       canonical.Secret,
 		Status:       canonical.Status,
 		ExpiresAt:    canonical.ExpiresAt,
+		Replayed:     canonical.Replayed,
 	}, nil
 }
 
@@ -274,7 +303,7 @@ func digest(value string) string {
 
 func fingerprint(command CreateInvitationCommand, ttl time.Duration) string {
 	value := strings.Join([]string{
-		command.ActorID,
+		command.CorePrincipalID,
 		"CREATE_INVITATION",
 		command.NodeID,
 		ttl.String(),
