@@ -5,6 +5,7 @@ import (
 	"time"
 
 	identityhttp "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/delivery/http"
+	"github.com/AR-IMMS/fleet-manager/internal/platform/httpapi"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/AR-IMMS/fleet-manager/internal/platform/http-server"
@@ -26,6 +27,7 @@ func newRouter(
 	}
 
 	router := chi.NewRouter()
+	router.Use(httpapi.RequestIDMiddleware(nil))
 
 	router.Get("/health/live", health.Live)
 	router.Get("/health/ready", health.Ready)
