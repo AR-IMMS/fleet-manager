@@ -45,9 +45,6 @@ func (o Options) Validate() error {
 	}
 
 	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("http listener must use an explicit loopback ip")
-	}
 
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 0 || portNumber > 65535 {
@@ -62,6 +59,9 @@ func (o Options) Validate() error {
 	}
 	if (o.TLSCertFile == "") != (o.TLSKeyFile == "") {
 		return fmt.Errorf("http TLS certificate and key must be configured together")
+	}
+	if o.TLSCertFile == "" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("http listener must use an explicit loopback ip without TLS")
 	}
 	if o.ClientCAFile != "" && o.TLSCertFile == "" {
 		return fmt.Errorf("http client CA requires TLS")

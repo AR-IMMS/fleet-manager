@@ -151,9 +151,24 @@ func TestServerRejectsPublicPlaintext(t *testing.T) {
 	}
 }
 
+func TestServerAllowsNonLoopbackOnlyWithTLS(t *testing.T) {
+	cfg := testOptions()
+	cfg.ListenAddress = "0.0.0.0:0"
+	if _, err := New(cfg, http.NewServeMux()); err == nil {
+		t.Fatal("expected non-loopback plaintext listener to be rejected")
+	}
+
+	certFile, keyFile, _, _ := createHTTPTestCertificates(t)
+	cfg.TLSCertFile, cfg.TLSKeyFile = certFile, keyFile
+	if _, err := New(cfg, http.NewServeMux()); err != nil {
+		t.Fatalf("non-loopback listener with TLS should be accepted: %v", err)
+	}
+}
+
 func TestServerTLSVerifiesOptionalCoreClientCertificate(t *testing.T) {
 	certFile, keyFile, caFile, certificate := createHTTPTestCertificates(t)
 	cfg := testOptions()
+	cfg.ListenAddress = "0.0.0.0:0"
 	cfg.TLSCertFile, cfg.TLSKeyFile, cfg.ClientCAFile = certFile, keyFile, caFile
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /test", func(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +195,11 @@ func TestServerTLSVerifiesOptionalCoreClientCertificate(t *testing.T) {
 
 	roots := x509.NewCertPool()
 	roots.AddCert(certificate)
+	_, port, err := net.SplitHostPort(server.Addr().String())
+	if err != nil {
+		t.Fatalf("split wildcard server address: %v", err)
+	}
+	requestAddress := net.JoinHostPort("127.0.0.1", port)
 	clientCert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		t.Fatalf("load client certificate: %v", err)
@@ -199,7 +219,7 @@ func TestServerTLSVerifiesOptionalCoreClientCertificate(t *testing.T) {
 			}}
 			client := &http.Client{Transport: transport, Timeout: time.Second}
 			defer client.CloseIdleConnections()
-			response, err := client.Get("https://" + server.Addr().String() + "/test")
+			response, err := client.Get("https://" + requestAddress + "/test")
 			if err != nil {
 				t.Fatalf("send HTTPS request: %v", err)
 			}
