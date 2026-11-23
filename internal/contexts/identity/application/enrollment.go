@@ -18,12 +18,20 @@ import (
 // result. Implementations protect replay secrets at rest and enforce idempotency.
 type EnrollmentStore interface {
 	CreateInvitation(context.Context, domain.EnrollmentInvitation) (domain.EnrollmentInvitation, error)
+	CancelInvitation(context.Context, string, string) error
 	Enroll(context.Context, domain.EnrollmentAttempt) (domain.EnrollmentResult, error)
 	Recover(context.Context, string, string, string) (domain.EnrollmentResult, error)
 	ChangeGate(context.Context, ChangeEnrollmentGateCommand) (domain.EnrollmentGate, error)
+	CloseGate(context.Context, string, string) (EnrollmentGateTransition, error)
+	CompleteGate(context.Context, string, string, int64, domain.EnrollmentGateStatus) error
 	GetStatus(context.Context, string) (domain.EnrollmentStatus, error)
 	GetInstallationByAgentID(context.Context, string) (domain.EnrollmentInstallation, error)
 	GetActiveInstallationByNode(context.Context, string) (domain.EnrollmentInstallation, error)
+}
+
+// CredentialRevoker fences all active credentials for one installation.
+type CredentialRevoker interface {
+	RevokeAgent(context.Context, string) error
 }
 
 // CreateInvitationCommand contains Core's stable operation and idempotency inputs.
@@ -55,6 +63,16 @@ type ExchangeInvitationCommand struct {
 	RecoveryProof   string
 }
 
+// EnrollmentGateTransition is the fenced snapshot Core uses for lifecycle compensation.
+type EnrollmentGateTransition struct {
+	NodeID               string
+	OperationID          string
+	Version              int64
+	PreviousState        domain.EnrollmentGateStatus
+	ActiveInstallationID string
+	ActiveBindingID      string
+}
+
 // ChangeEnrollmentGateCommand carries a Core operation that opens or closes one Node gate.
 type ChangeEnrollmentGateCommand struct {
 	OperationID string
@@ -67,12 +85,36 @@ type ChangeEnrollmentGateCommand struct {
 // EnrollmentService owns invitation, exchange, recovery, and gate use cases.
 type EnrollmentService struct {
 	Store            EnrollmentStore
+	Revoker          CredentialRevoker
 	Entropy          io.Reader
 	Now              func() time.Time
 	DefaultInviteTTL time.Duration
 	MaximumInviteTTL time.Duration
 	RecoveryTTL      time.Duration
 	OpAMPEndpoint    string
+}
+
+// CancelInvitation invalidates a pending invitation. Redeemed invitations are
+// not credentials and must be revoked through the credential lifecycle.
+func (s EnrollmentService) CancelInvitation(ctx context.Context, invitationID, operationID string) error {
+	if err := s.validate(); err != nil {
+		return err
+	}
+	if ctx == nil || validateEnrollmentInput(invitationID, "invitation ID") != nil || validateEnrollmentInput(operationID, "operation ID") != nil {
+		return fmt.Errorf("enrollment invitation ID is invalid")
+	}
+	return s.Store.CancelInvitation(ctx, invitationID, operationID)
+}
+
+// RevokeAgent fences every active credential belonging to an installation.
+func (s EnrollmentService) RevokeAgent(ctx context.Context, agentID string) error {
+	if s.Revoker == nil {
+		return fmt.Errorf("credential revoker is required")
+	}
+	if ctx == nil || validateEnrollmentInput(agentID, "Agent ID") != nil {
+		return fmt.Errorf("enrollment Agent ID is invalid")
+	}
+	return s.Revoker.RevokeAgent(ctx, agentID)
 }
 
 // Exchange validates an invitation and returns one generated credential. The
@@ -163,6 +205,28 @@ func (s EnrollmentService) ChangeGate(ctx context.Context, command ChangeEnrollm
 		return domain.EnrollmentGate{}, fmt.Errorf("enrollment gate status is invalid")
 	}
 	return s.Store.ChangeGate(ctx, command)
+}
+
+// CloseGate fences new exchanges and returns the prior gate and binding state.
+func (s EnrollmentService) CloseGate(ctx context.Context, nodeID, operationID string) (EnrollmentGateTransition, error) {
+	if err := s.validate(); err != nil {
+		return EnrollmentGateTransition{}, err
+	}
+	if ctx == nil || validateEnrollmentInput(nodeID, "Node ID") != nil || validateEnrollmentInput(operationID, "operation ID") != nil {
+		return EnrollmentGateTransition{}, fmt.Errorf("enrollment gate operation is invalid")
+	}
+	return s.Store.CloseGate(ctx, nodeID, operationID)
+}
+
+// CompleteGate commits or compensates a previously fenced gate transition.
+func (s EnrollmentService) CompleteGate(ctx context.Context, nodeID, operationID string, version int64, state domain.EnrollmentGateStatus) error {
+	if err := s.validate(); err != nil {
+		return err
+	}
+	if ctx == nil || validateEnrollmentInput(nodeID, "Node ID") != nil || validateEnrollmentInput(operationID, "operation ID") != nil || version <= 0 || (state != domain.EnrollmentGateOpen && state != domain.EnrollmentGateClosed) {
+		return fmt.Errorf("enrollment gate completion is invalid")
+	}
+	return s.Store.CompleteGate(ctx, nodeID, operationID, version, state)
 }
 
 // GetStatus returns the secret-free state Core needs to reconcile its own lifecycle journal.

@@ -63,12 +63,17 @@ type attemptRecord struct {
 }
 
 type gateRecord struct {
-	NodeID        string   `bson:"_id"`
-	Status        string   `bson:"status"`
-	OperationID   string   `bson:"operation_id,omitempty"`
-	Version       int64    `bson:"version"`
-	Touch         int64    `bson:"touch"`
-	BoundAgentIDs []string `bson:"bound_agent_ids"`
+	NodeID               string   `bson:"_id"`
+	Status               string   `bson:"status"`
+	OperationID          string   `bson:"operation_id,omitempty"`
+	Version              int64    `bson:"version"`
+	Touch                int64    `bson:"touch"`
+	BoundAgentIDs        []string `bson:"bound_agent_ids"`
+	PendingOperationID   string   `bson:"pending_operation_id,omitempty"`
+	PreviousState        string   `bson:"previous_state,omitempty"`
+	LastOperationID      string   `bson:"last_operation_id,omitempty"`
+	LastOperationVersion int64    `bson:"last_operation_version,omitempty"`
+	LastOperationState   string   `bson:"last_operation_state,omitempty"`
 }
 
 type gateOperationRecord struct {
@@ -298,6 +303,54 @@ func (s *EnrollmentStore) CreateInvitation(ctx context.Context, invitation domai
 	return invitation, nil
 }
 
+// CancelInvitation atomically cancels an unconsumed invitation and erases its replay secret.
+func (s *EnrollmentStore) CancelInvitation(ctx context.Context, invitationID, operationID string) error {
+	session, err := s.client.StartSession()
+	if err != nil {
+		return errEnrollmentStoreUnavailable
+	}
+	defer session.EndSession(ctx)
+	_, err = session.WithTransaction(ctx, func(txCtx context.Context) (any, error) {
+		invites := s.database.Collection(invitationsCollectionName)
+		var invitation invitationRecord
+		if findErr := invites.FindOne(txCtx, bson.M{"invitation_id": invitationID}).Decode(&invitation); errors.Is(findErr, mongo.ErrNoDocuments) {
+			return nil, domain.ErrEnrollmentNotFound
+		} else if findErr != nil {
+			return nil, findErr
+		}
+		if invitation.OperationID != operationID {
+			return nil, domain.ErrEnrollmentConflict
+		}
+		switch invitation.Status {
+		case string(domain.InvitationCancelled), string(domain.InvitationExpired):
+			return nil, nil
+		case string(domain.InvitationRedeemed):
+			return nil, domain.ErrEnrollmentConflict
+		case string(domain.InvitationPending):
+		default:
+			return nil, domain.ErrEnrollmentConflict
+		}
+		result, updateErr := invites.UpdateOne(txCtx, bson.M{"_id": invitation.ID, "status": string(domain.InvitationPending)}, bson.M{"$set": bson.M{"status": string(domain.InvitationCancelled)}})
+		if updateErr != nil {
+			return nil, updateErr
+		}
+		if result.MatchedCount != 1 {
+			return nil, domain.ErrEnrollmentConflict
+		}
+		if _, deleteErr := s.database.Collection(invitationEscrowName).DeleteOne(txCtx, bson.M{"_id": invitation.InvitationID}); deleteErr != nil {
+			return nil, deleteErr
+		}
+		return nil, nil
+	})
+	if err != nil {
+		if errors.Is(err, domain.ErrEnrollmentNotFound) || errors.Is(err, domain.ErrEnrollmentConflict) {
+			return err
+		}
+		return errEnrollmentStoreUnavailable
+	}
+	return nil
+}
+
 // Enroll atomically consumes a valid invitation, creates an identity credential,
 // and stores an encrypted result for retry or recovery.
 func (s *EnrollmentStore) Enroll(ctx context.Context, attempt domain.EnrollmentAttempt) (domain.EnrollmentResult, error) {
@@ -410,6 +463,100 @@ func (s *EnrollmentStore) Enroll(ctx context.Context, attempt domain.EnrollmentA
 	return result, nil
 }
 
+// CloseGate atomically fences exchanges and snapshots the prior state for compensation.
+func (s *EnrollmentStore) CloseGate(ctx context.Context, nodeID, operationID string) (application.EnrollmentGateTransition, error) {
+	session, err := s.client.StartSession()
+	if err != nil {
+		return application.EnrollmentGateTransition{}, errEnrollmentStoreUnavailable
+	}
+	defer session.EndSession(ctx)
+	value, err := session.WithTransaction(ctx, func(txCtx context.Context) (any, error) {
+		gates := s.database.Collection(gatesCollectionName)
+		var gate gateRecord
+		if findErr := gates.FindOne(txCtx, bson.M{"_id": nodeID}).Decode(&gate); errors.Is(findErr, mongo.ErrNoDocuments) {
+			gate = gateRecord{NodeID: nodeID, Status: string(domain.EnrollmentGateOpen), BoundAgentIDs: []string{}}
+			if _, insertErr := gates.InsertOne(txCtx, gate); insertErr != nil {
+				return nil, insertErr
+			}
+		} else if findErr != nil {
+			return nil, findErr
+		}
+		if gate.PendingOperationID != "" {
+			if gate.PendingOperationID != operationID {
+				return nil, domain.ErrEnrollmentConflict
+			}
+			transition, transitionErr := transitionFromGate(txCtx, s.database, gate, gate.PreviousState)
+			return transition, transitionErr
+		}
+		if gate.LastOperationID == operationID {
+			transition, transitionErr := transitionFromGate(txCtx, s.database, gate, gate.PreviousState)
+			return transition, transitionErr
+		}
+		previous := gate.Status
+		gate.PendingOperationID = operationID
+		gate.PreviousState = previous
+		gate.Status = string(domain.EnrollmentGateClosed)
+		gate.Version++
+		if _, updateErr := gates.UpdateOne(txCtx, bson.M{"_id": nodeID}, bson.M{"$set": bson.M{"status": gate.Status, "version": gate.Version, "pending_operation_id": operationID, "previous_state": previous}}); updateErr != nil {
+			return nil, updateErr
+		}
+		transition, transitionErr := transitionFromGate(txCtx, s.database, gate, previous)
+		return transition, transitionErr
+	})
+	if err != nil {
+		if errors.Is(err, domain.ErrEnrollmentConflict) {
+			return application.EnrollmentGateTransition{}, err
+		}
+		return application.EnrollmentGateTransition{}, errEnrollmentStoreUnavailable
+	}
+	transition, ok := value.(application.EnrollmentGateTransition)
+	if !ok {
+		return application.EnrollmentGateTransition{}, errEnrollmentStoreUnavailable
+	}
+	return transition, nil
+}
+
+func transitionFromGate(ctx context.Context, database *mongo.Database, gate gateRecord, previous string) (application.EnrollmentGateTransition, error) {
+	transition := application.EnrollmentGateTransition{NodeID: gate.NodeID, OperationID: gate.PendingOperationID, Version: gate.Version, PreviousState: domain.EnrollmentGateStatus(previous)}
+	if transition.OperationID == "" {
+		transition.OperationID = gate.LastOperationID
+		if gate.LastOperationVersion > 0 {
+			transition.Version = gate.LastOperationVersion
+		}
+	}
+	var active record
+	if err := database.Collection(collectionName).FindOne(ctx, bson.M{"node_id": gate.NodeID, "status": "ACTIVE"}).Decode(&active); err == nil {
+		transition.ActiveInstallationID = active.AgentID
+		transition.ActiveBindingID = active.CredentialID
+	} else if !errors.Is(err, mongo.ErrNoDocuments) {
+		return application.EnrollmentGateTransition{}, err
+	}
+	return transition, nil
+}
+
+// CompleteGate commits or compensates only the transition version returned by CloseGate.
+func (s *EnrollmentStore) CompleteGate(ctx context.Context, nodeID, operationID string, version int64, state domain.EnrollmentGateStatus) error {
+	result, err := s.database.Collection(gatesCollectionName).UpdateOne(ctx, bson.M{"_id": nodeID, "pending_operation_id": operationID, "version": version},
+		bson.M{"$set": bson.M{"status": string(state), "last_operation_id": operationID, "last_operation_version": version, "last_operation_state": string(state)}, "$inc": bson.M{"version": 1}, "$unset": bson.M{"pending_operation_id": "", "previous_state": ""}})
+	if err != nil {
+		return errEnrollmentStoreUnavailable
+	}
+	if result.MatchedCount == 1 {
+		return nil
+	}
+	var gate gateRecord
+	if lookupErr := s.database.Collection(gatesCollectionName).FindOne(ctx, bson.M{"_id": nodeID}).Decode(&gate); lookupErr != nil {
+		if errors.Is(lookupErr, mongo.ErrNoDocuments) {
+			return domain.ErrEnrollmentNotFound
+		}
+		return errEnrollmentStoreUnavailable
+	}
+	if gate.LastOperationID == operationID && gate.LastOperationVersion == version && gate.LastOperationState == string(state) {
+		return nil
+	}
+	return domain.ErrEnrollmentConflict
+}
+
 // ChangeGate serializes lifecycle changes against invitation creation and exchange.
 func (s *EnrollmentStore) ChangeGate(ctx context.Context, command application.ChangeEnrollmentGateCommand) (domain.EnrollmentGate, error) {
 	session, err := s.client.StartSession()
@@ -439,6 +586,9 @@ func (s *EnrollmentStore) ChangeGate(ctx context.Context, command application.Ch
 			}
 		} else if findErr != nil {
 			return nil, findErr
+		}
+		if gate.PendingOperationID != "" {
+			return nil, domain.ErrEnrollmentConflict
 		}
 		gate.Status = string(command.Status)
 		gate.OperationID = command.OperationID

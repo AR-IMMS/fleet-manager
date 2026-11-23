@@ -167,6 +167,28 @@ func (v *Verifier) Revoke(ctx context.Context, credentialID string) error {
 	return nil
 }
 
+// RevokeAgent atomically fences every active credential for an installation.
+func (v *Verifier) RevokeAgent(ctx context.Context, agentID string) error {
+	if strings.TrimSpace(agentID) == "" || strings.TrimSpace(agentID) != agentID {
+		return domain.ErrEnrollmentConflict
+	}
+	result, err := v.collection.UpdateMany(ctx, bson.M{"agent_id": agentID, "status": "ACTIVE"}, bson.M{"$set": bson.M{"status": "REVOKED"}})
+	if err != nil {
+		return domain.ErrIdentityUnavailable
+	}
+	if result.MatchedCount > 0 {
+		return nil
+	}
+	count, err := v.collection.CountDocuments(ctx, bson.M{"agent_id": agentID})
+	if err != nil {
+		return domain.ErrIdentityUnavailable
+	}
+	if count == 0 {
+		return domain.ErrEnrollmentNotFound
+	}
+	return nil
+}
+
 func digest(credential string) string {
 	sum := sha256.Sum256([]byte(credential))
 	return hex.EncodeToString(sum[:])

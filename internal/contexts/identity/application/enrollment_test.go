@@ -165,6 +165,9 @@ type memoryEnrollmentStore struct {
 	attempts    map[string]domain.EnrollmentAttempt
 }
 
+func (s *memoryEnrollmentStore) CancelInvitation(context.Context, string, string) error { return nil }
+func (s *memoryEnrollmentStore) RevokeAgent(context.Context, string) error              { return nil }
+
 func (s *memoryEnrollmentStore) CreateInvitation(
 	_ context.Context,
 	invitation domain.EnrollmentInvitation,
@@ -205,6 +208,13 @@ func (s *memoryEnrollmentStore) Recover(
 		return domain.EnrollmentResult{}, domain.ErrEnrollmentRecoveryRejected
 	}
 	return attempt.Result, nil
+}
+
+func (s *memoryEnrollmentStore) CloseGate(_ context.Context, nodeID, operationID string) (EnrollmentGateTransition, error) {
+	return EnrollmentGateTransition{NodeID: nodeID, OperationID: operationID, Version: 1, PreviousState: domain.EnrollmentGateOpen}, nil
+}
+func (s *memoryEnrollmentStore) CompleteGate(context.Context, string, string, int64, domain.EnrollmentGateStatus) error {
+	return nil
 }
 
 func (s *memoryEnrollmentStore) ChangeGate(

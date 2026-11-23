@@ -367,6 +367,46 @@ func TestCoreInstallationLookupsRequireVerifiedCertificateAndNeverReturnSecrets(
 	}
 }
 
+func TestCoreLifecycleRoutesSupportCancellationGateCompensationAndRevocation(t *testing.T) {
+	store := &httpEnrollmentStore{}
+	service := enrollmentTestService(store)
+	handler, err := NewEnrollmentHandler(&service, "fleet-core")
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := newEnrollmentRouter(handler)
+	certificate := &x509.Certificate{Subject: pkix.Name{CommonName: "fleet-core"}}
+	newRequest := func(method, path, body string) *http.Request {
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}, VerifiedChains: [][]*x509.Certificate{{certificate}}}
+		request.Header.Set("X-ARIMMS-Operation-Id", "lifecycle-op-1")
+		return request
+	}
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, newRequest(http.MethodPost, "/internal/v1/enrollment/invitations/invite-1/cancel", "{\"schema_version\":1,\"operation_id\":\"lifecycle-op-1\"}"))
+	if response.Code != http.StatusNoContent || store.cancelledID != "invite-1" {
+		t.Fatalf("cancel response=%d cancelled=%q", response.Code, store.cancelledID)
+	}
+
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, newRequest(http.MethodPost, "/internal/v1/nodes/node-1/enrollment-gate/close", ""))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "\"previous_state\":\"OPEN\"") || !strings.Contains(response.Body.String(), "\"binding_id\":\"credential-1\"") {
+		t.Fatalf("gate close response=%d body=%s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, newRequest(http.MethodPut, "/internal/v1/nodes/node-1/enrollment-gate", "{\"schema_version\":1,\"operation_id\":\"lifecycle-op-1\",\"version\":1,\"state\":\"OPEN\"}"))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("gate compensation response=%d body=%s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, newRequest(http.MethodPost, "/internal/v1/agents/agent-1/revoke", ""))
+	if response.Code != http.StatusNoContent || store.revokedID != "agent-1" {
+		t.Fatalf("revoke response=%d revoked=%q", response.Code, store.revokedID)
+	}
+}
+
 func newEnrollmentRouter(handler *EnrollmentHandler) chi.Router {
 	router := chi.NewRouter()
 	router.Use(httpapi.RequestIDMiddleware(nil))
@@ -375,8 +415,9 @@ func newEnrollmentRouter(handler *EnrollmentHandler) chi.Router {
 }
 
 func enrollmentTestService(store application.EnrollmentStore) application.EnrollmentService {
+	revoker, _ := store.(application.CredentialRevoker)
 	return application.EnrollmentService{
-		Store: store, DefaultInviteTTL: time.Minute, MaximumInviteTTL: time.Hour,
+		Store: store, Revoker: revoker, DefaultInviteTTL: time.Minute, MaximumInviteTTL: time.Hour,
 		RecoveryTTL: time.Hour, OpAMPEndpoint: "wss://fleet.example.test/v1/opamp",
 	}
 }
@@ -387,6 +428,17 @@ type httpEnrollmentStore struct {
 	lastIdempotencyHash string
 	invitations         map[string]domain.EnrollmentInvitation
 	enrollErr           error
+	cancelledID         string
+	revokedID           string
+}
+
+func (s *httpEnrollmentStore) CancelInvitation(_ context.Context, id, _ string) error {
+	s.cancelledID = id
+	return nil
+}
+func (s *httpEnrollmentStore) RevokeAgent(_ context.Context, id string) error {
+	s.revokedID = id
+	return nil
 }
 
 func (s *httpEnrollmentStore) CreateInvitation(_ context.Context, invitation domain.EnrollmentInvitation) (domain.EnrollmentInvitation, error) {
@@ -419,6 +471,13 @@ func (s *httpEnrollmentStore) Enroll(_ context.Context, attempt domain.Enrollmen
 
 func (*httpEnrollmentStore) Recover(context.Context, string, string, string) (domain.EnrollmentResult, error) {
 	return domain.EnrollmentResult{AgentID: "agent-1", CredentialID: "credential-1", Credential: "generated-credential-for-test", OpAMPEndpoint: "wss://fleet.example.test/v1/opamp"}, nil
+}
+
+func (*httpEnrollmentStore) CloseGate(_ context.Context, nodeID, operationID string) (application.EnrollmentGateTransition, error) {
+	return application.EnrollmentGateTransition{NodeID: nodeID, OperationID: operationID, Version: 1, PreviousState: domain.EnrollmentGateOpen, ActiveInstallationID: "agent-1", ActiveBindingID: "credential-1"}, nil
+}
+func (*httpEnrollmentStore) CompleteGate(context.Context, string, string, int64, domain.EnrollmentGateStatus) error {
+	return nil
 }
 
 func (*httpEnrollmentStore) ChangeGate(_ context.Context, command application.ChangeEnrollmentGateCommand) (domain.EnrollmentGate, error) {

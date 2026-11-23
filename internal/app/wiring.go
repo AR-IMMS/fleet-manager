@@ -78,7 +78,7 @@ func wireRuntime(
 			return runtime, fmt.Errorf("verify Mongo transaction support for enrollment: %w", transactionErr)
 		}
 		enrollmentService := &identityapp.EnrollmentService{
-			Store: enrollmentStore, DefaultInviteTTL: cfg.Enrollment.DefaultInviteTTL,
+			Store: enrollmentStore, Revoker: runtime.identityStore, DefaultInviteTTL: cfg.Enrollment.DefaultInviteTTL,
 			MaximumInviteTTL: cfg.Enrollment.MaximumInviteTTL, RecoveryTTL: cfg.Enrollment.RecoveryTTL,
 			OpAMPEndpoint: cfg.Enrollment.OpAMPEndpoint,
 		}

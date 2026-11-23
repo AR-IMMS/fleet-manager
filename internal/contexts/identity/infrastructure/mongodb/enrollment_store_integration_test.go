@@ -16,6 +16,107 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
+func TestEnrollmentGateCompensationIsVersionFenced(t *testing.T) {
+	ctx, database := newMigrationTestDatabase(t)
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureIndexes(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewEnrollmentStore(database, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.VerifyTransactionSupport(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.verifier.storeCredentialForNode(ctx, "agent-compensate", "node-compensate", "credential-compensate", "token-compensate-012345678901234567890123456789"); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := store.CloseGate(ctx, "node-compensate", "lifecycle-op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.PreviousState != domain.EnrollmentGateOpen || closed.Version != 1 || closed.ActiveInstallationID != "agent-compensate" || closed.ActiveBindingID != "credential-compensate" {
+		t.Fatalf("close transition = %+v", closed)
+	}
+	replay, err := store.CloseGate(ctx, "node-compensate", "lifecycle-op")
+	if err != nil || replay.Version != closed.Version {
+		t.Fatalf("close replay=%+v err=%v", replay, err)
+	}
+	if _, err := store.ChangeGate(ctx, application.ChangeEnrollmentGateCommand{OperationID: "legacy-op", NodeID: "node-compensate", Status: domain.EnrollmentGateOpen}); !errors.Is(err, domain.ErrEnrollmentConflict) {
+		t.Fatalf("legacy gate mutation during pending transition error=%v", err)
+	}
+	if err := store.CompleteGate(ctx, "node-compensate", "other-op", closed.Version, domain.EnrollmentGateOpen); !errors.Is(err, domain.ErrEnrollmentConflict) {
+		t.Fatalf("wrong operation completion error=%v", err)
+	}
+	if err := store.CompleteGate(ctx, "node-compensate", "lifecycle-op", closed.Version, domain.EnrollmentGateOpen); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteGate(ctx, "node-compensate", "lifecycle-op", closed.Version, domain.EnrollmentGateOpen); err != nil {
+		t.Fatalf("completion replay: %v", err)
+	}
+
+	var gate gateRecord
+	if err := database.Collection(gatesCollectionName).FindOne(ctx, bson.M{"_id": "node-compensate"}).Decode(&gate); err != nil {
+		t.Fatal(err)
+	}
+	if gate.Status != string(domain.EnrollmentGateOpen) || gate.PendingOperationID != "" {
+		t.Fatalf("compensated gate=%+v", gate)
+	}
+}
+
+func TestEnrollmentCancellationAndAgentCredentialRevocation(t *testing.T) {
+	ctx, database := newMigrationTestDatabase(t)
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureIndexes(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewEnrollmentStore(database, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.VerifyTransactionSupport(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := application.EnrollmentService{Store: store, Revoker: store.verifier, DefaultInviteTTL: time.Minute, MaximumInviteTTL: time.Hour, RecoveryTTL: time.Hour, OpAMPEndpoint: "wss://fleet.example.test/v1/opamp"}
+
+	invitation, err := service.CreateInvitation(ctx, application.CreateInvitationCommand{OperationID: "cancel-op", CorePrincipalID: "core", IdempotencyKey: "cancel-key", ActorID: "operator", NodeID: "node-cancel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.CancelInvitation(ctx, invitation.InvitationID, "cancel-op"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.CancelInvitation(ctx, invitation.InvitationID, "cancel-op"); err != nil {
+		t.Fatalf("cancel replay: %v", err)
+	}
+	status, err := service.GetStatus(ctx, "cancel-op")
+	if err != nil || status.Status != string(domain.InvitationCancelled) {
+		t.Fatalf("cancelled status=%+v err=%v", status, err)
+	}
+	if _, err := service.Exchange(ctx, application.ExchangeInvitationCommand{AttemptID: "cancel-attempt", AgentID: "agent-cancel", InvitationToken: invitation.Secret, RecoveryProof: "recovery-cancel-012345678901234567890123456789"}); !errors.Is(err, domain.ErrInvitationRejected) {
+		t.Fatalf("cancelled exchange error=%v", err)
+	}
+
+	if err := store.verifier.StoreActiveCredential(ctx, "agent-revoke", "credential-revoke", "token-revoke-012345678901234567890123456789"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RevokeAgent(ctx, "agent-revoke"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RevokeAgent(ctx, "agent-revoke"); err != nil {
+		t.Fatalf("revoke replay: %v", err)
+	}
+	if _, err := store.verifier.Verify(ctx, "token-revoke-012345678901234567890123456789"); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("revoked token verify error=%v", err)
+	}
+}
+
 func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
 	ctx, database := newMigrationTestDatabase(t)
 	if err := Migrate(ctx, database); err != nil {

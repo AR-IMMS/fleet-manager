@@ -35,7 +35,11 @@ func NewEnrollmentHandler(service *application.EnrollmentService, coreClientCN s
 // Mount registers provisional invitation and Agent exchange routes.
 func (h *EnrollmentHandler) Mount(router chi.Router) {
 	router.Post("/internal/v1/enrollment/invitations", h.createInvitation)
+	router.Post("/internal/v1/enrollment/invitations/{invitation_id}/cancel", h.cancelInvitation)
+	router.Post("/internal/v1/agents/{agent_id}/revoke", h.revokeAgent)
 	router.Post("/internal/v1/enrollment/nodes/{node_id}/gate", h.changeGate)
+	router.Post("/internal/v1/nodes/{node_id}/enrollment-gate/close", h.closeGate)
+	router.Put("/internal/v1/nodes/{node_id}/enrollment-gate", h.completeGate)
 	router.Get("/internal/v1/enrollment/operations/{operation_id}", h.getStatus)
 	router.Get("/internal/v1/installations/{agent_id}", h.getInstallation)
 	router.Get("/internal/v1/nodes/{node_id}/active-installation", h.getActiveInstallation)
@@ -58,6 +62,11 @@ type createInvitationResponse struct {
 	NodeID        string    `json:"node_id"`
 	Status        string    `json:"status"`
 	ExpiresAt     time.Time `json:"expires_at"`
+}
+
+type cancelInvitationRequest struct {
+	SchemaVersion int    `json:"schema_version"`
+	OperationID   string `json:"operation_id"`
 }
 
 type exchangeRequest struct {
@@ -94,6 +103,26 @@ type changeGateResponse struct {
 	OperationID   string   `json:"operation_id"`
 	Version       int64    `json:"version"`
 	BoundAgentIDs []string `json:"bound_agent_ids"`
+}
+
+type completeGateRequest struct {
+	SchemaVersion int    `json:"schema_version"`
+	OperationID   string `json:"operation_id"`
+	Version       int64  `json:"version"`
+	State         string `json:"state"`
+}
+
+type activeBindingResponse struct {
+	InstallationID string `json:"installation_id"`
+	BindingID      string `json:"binding_id"`
+}
+
+type closeGateResponse struct {
+	NodeID        string                 `json:"node_id"`
+	OperationID   string                 `json:"operation_id"`
+	Version       int64                  `json:"version"`
+	PreviousState string                 `json:"previous_state"`
+	ActiveBinding *activeBindingResponse `json:"active_binding"`
 }
 
 type enrollmentStatusResponse struct {
@@ -159,6 +188,38 @@ func (h *EnrollmentHandler) createInvitation(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+func (h *EnrollmentHandler) cancelInvitation(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.coreActor(r); !ok {
+		writeEnrollmentProblem(w, r, http.StatusUnauthorized, "INVALID_REQUEST", "The caller could not be authenticated.")
+		return
+	}
+	var request cancelInvitationRequest
+	if !decodeEnrollmentJSON(w, r, &request) {
+		return
+	}
+	if request.SchemaVersion != 1 || request.OperationID == "" || request.OperationID != r.Header.Get("X-ARIMMS-Operation-Id") {
+		writeEnrollmentProblem(w, r, http.StatusBadRequest, "INVALID_REQUEST", "The request body is invalid.")
+		return
+	}
+	if err := h.service.CancelInvitation(r.Context(), chi.URLParam(r, "invitation_id"), request.OperationID); err != nil {
+		writeEnrollmentError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *EnrollmentHandler) revokeAgent(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.coreActor(r); !ok {
+		writeEnrollmentProblem(w, r, http.StatusUnauthorized, "INVALID_REQUEST", "The caller could not be authenticated.")
+		return
+	}
+	if err := h.service.RevokeAgent(r.Context(), chi.URLParam(r, "agent_id")); err != nil {
+		writeEnrollmentError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *EnrollmentHandler) exchange(w http.ResponseWriter, r *http.Request) {
 	var request exchangeRequest
 	if !decodeEnrollmentJSON(w, r, &request) {
@@ -201,6 +262,48 @@ func (h *EnrollmentHandler) changeGate(w http.ResponseWriter, r *http.Request) {
 		NodeID: result.NodeID, Status: string(result.Status), OperationID: result.OperationID,
 		Version: result.Version, BoundAgentIDs: result.BoundAgentIDs,
 	})
+}
+
+func (h *EnrollmentHandler) closeGate(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.coreActor(r); !ok {
+		writeEnrollmentProblem(w, r, http.StatusUnauthorized, "INVALID_REQUEST", "The caller could not be authenticated.")
+		return
+	}
+	operationID := r.Header.Get("X-ARIMMS-Operation-Id")
+	if operationID == "" {
+		writeEnrollmentProblem(w, r, http.StatusBadRequest, "INVALID_REQUEST", "The request body is invalid.")
+		return
+	}
+	transition, err := h.service.CloseGate(r.Context(), chi.URLParam(r, "node_id"), operationID)
+	if err != nil {
+		writeEnrollmentError(w, r, err)
+		return
+	}
+	var binding *activeBindingResponse
+	if transition.ActiveInstallationID != "" && transition.ActiveBindingID != "" {
+		binding = &activeBindingResponse{InstallationID: transition.ActiveInstallationID, BindingID: transition.ActiveBindingID}
+	}
+	writeEnrollmentJSON(w, r, http.StatusOK, closeGateResponse{NodeID: transition.NodeID, OperationID: transition.OperationID, Version: transition.Version, PreviousState: string(transition.PreviousState), ActiveBinding: binding})
+}
+
+func (h *EnrollmentHandler) completeGate(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.coreActor(r); !ok {
+		writeEnrollmentProblem(w, r, http.StatusUnauthorized, "INVALID_REQUEST", "The caller could not be authenticated.")
+		return
+	}
+	var request completeGateRequest
+	if !decodeEnrollmentJSON(w, r, &request) {
+		return
+	}
+	if request.SchemaVersion != 1 || request.OperationID == "" || request.OperationID != r.Header.Get("X-ARIMMS-Operation-Id") {
+		writeEnrollmentProblem(w, r, http.StatusBadRequest, "INVALID_REQUEST", "The request body is invalid.")
+		return
+	}
+	if err := h.service.CompleteGate(r.Context(), chi.URLParam(r, "node_id"), request.OperationID, request.Version, domain.EnrollmentGateStatus(request.State)); err != nil {
+		writeEnrollmentError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *EnrollmentHandler) getStatus(w http.ResponseWriter, r *http.Request) {
