@@ -1,0 +1,16 @@
+.git
+.github
+.vscode
+.agents
+.codex
+.env
+.env.*
+coverage
+dist
+tmp
+*.log
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
