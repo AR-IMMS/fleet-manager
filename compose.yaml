@@ -1,0 +1,55 @@
+services:
+  mongodb:
+    image: mongo:8.0
+    restart: unless-stopped
+    command: ['mongod', '--replSet', 'rs0', '--bind_ip_all']
+    ports:
+      - '127.0.0.1:${FLEET_MONGODB_HOST_PORT:-27020}:27017'
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - >-
+          try { rs.status(); }
+          catch (error) {
+            try { rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'localhost:27017'}]}); }
+            catch (initError) {}
+          }
+          quit(db.hello().isWritablePrimary ? 0 : 1);
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  fleet-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    stop_grace_period: 15s
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      FLEET_HTTP_LISTEN_ADDRESS: 127.0.0.1:18081
+      FLEET_MONGODB_URI: mongodb://127.0.0.1:${FLEET_MONGODB_HOST_PORT:-27020}/?directConnection=true
+      FLEET_MONGODB_DATABASE: ar_imms_fleet
+      FLEET_LOG_FORMAT: json
+      OPAMP_ENABLED: 'false'
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q --spider http://127.0.0.1:18081/health/ready || exit 1
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  mongodb-data:

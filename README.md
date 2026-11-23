@@ -50,3 +50,29 @@ go mod tidy -diff
 ```
 
 The official [OpAMP specification](https://opentelemetry.io/docs/specs/opamp/) governs protocol semantics. The shared C01–C04 contracts govern accepted AR-IMMS ownership; their proposed wire examples are not approved endpoints.
+
+## Local Docker Compose
+
+The development Compose stack builds a non-root Fleet image and starts a
+separate MongoDB replica set. It is for local development only: MongoDB has no
+authentication, and the current Fleet HTTP listener is health-only. OpAMP
+remains disabled.
+
+Fleet deliberately validates that its plaintext HTTP listener binds to an
+explicit loopback address. The Compose service uses host networking to retain
+that boundary and is reachable at `http://127.0.0.1:18081`. On Docker Desktop
+4.34 or later, enable **Settings → Resources → Network → Enable host
+networking**. Linux Docker Engine supports host networking without that setting.
+This service uses host port `27020` for its local MongoDB replica set so it can
+run beside the existing Core MongoDB stack. Change
+`FLEET_MONGODB_HOST_PORT` if that port is occupied.
+
+```bash
+docker compose up --build --wait
+docker compose ps
+```
+
+Check Fleet readiness at `http://127.0.0.1:18081/health/ready`. Follow logs
+with `docker compose logs -f fleet-manager`. Stop the stack with
+`docker compose down`; the named MongoDB volume remains. `docker compose down
+-v` deletes the Fleet development database volume.
