@@ -15,6 +15,12 @@ type MongoConfig = platformconfig.MongoConfig
 // LoggingConfig contains structured logging settings.
 type LoggingConfig = platformconfig.LoggingConfig
 
+// HTTPConfig contains Fleet REST listener settings.
+type HTTPConfig = platformconfig.HTTPConfig
+
+// EnrollmentConfig contains enrollment route and secret escrow settings.
+type EnrollmentConfig = platformconfig.EnrollmentConfig
+
 // LookupEnv reads a runtime setting.
 type LookupEnv = platformconfig.LookupEnv
 

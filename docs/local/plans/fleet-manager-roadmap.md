@@ -1,6 +1,6 @@
 # Fleet Manager — Implementation Roadmap
 
-Updated: 2026-11-22
+Updated: 2026-11-23
 Status: IN PROGRESS — roadmap reflects source and test evidence checked on this date; checkpoint status is not a production-readiness claim.
 
 ## Purpose and scope
@@ -52,6 +52,41 @@ Acceptance: service starts with valid settings, rejects invalid settings, report
 
 **Current acceptance note (2026-11-22):** `cmd/fleet-manager` delegates to `Application.Run`. Startup opens Mongo, applies immutable `identity-installations-v1`, reconciles required indexes independently on every startup, then constructs the verifier and listeners. Migration checksum drift, unknown migration history, duplicate legacy values, and incompatible index definitions fail startup without deleting identity records. The local race-enabled Mongo integration suite passed for concurrent baseline starts, index recreation/options, conflict and duplicate-data failure, and binding/revocation behavior. The full local pinned-Supervisor plus Mongo integration suite passed for retained-state UID continuity, fresh-state conflict, application startup/readiness/authentication/UID binding/shutdown, listener-bind cleanup, and index-conflict startup failure. CI's workflow uses MongoDB 8.0 standalone; the updated hosted workflow has not run for this change. The minimum supported MongoDB version and production HA/backup/failover topology remain OPEN, so FM-01 remains IN PROGRESS. OpAMP remains disabled by default while credential provisioning/revocation authorization and C01/C04 security decisions remain open.
 
+### Registration follow-up evidence (2026-11-23)
+
+Fleet cancellation, version-fenced enrollment-gate close/compensation, and per-Agent
+credential revocation are implemented in 12fa4f981f15e2dd3444b08d3833e617c6f13392.
+`go test ./...`, `go test -race ./...`, `go vet ./...`, `golangci-lint run ./...`,
+`go build ./...`, and the required race-enabled Mongo integration package passed
+locally. The Mongo integration suite used the local replica set and a disposable
+test database. The API routes are still provisional; Core has cancellation and
+gate adapters, while a Core-to-Fleet credential revocation use case and any
+credential rotation protocol remain unimplemented/open.
+
+The pinned Windows Supervisor v0.160.0 test passed: retained state preserved its
+`instance_uid`, and a fresh state directory produced a different UID. The
+Mongo-backed Fleet application acceptance tests passed on Windows, including
+authenticated OpAMP, UID binding, shutdown, startup cleanup, and index-conflict
+fail-closed behavior. Earlier real-service UAT passed registration through
+Supervisor and OTLP metric receipt. `baseline_snapshot_failed` warnings stopped
+after restoring three missing Agent config files in the temporary UAT mount;
+this was a UAT packaging/configuration error, not a reproduced product defect.
+
+Current UAT limits: Prometheus has `host_id` but no `agent_id`/installation
+attribution; the checked-in Gateway has metrics only and no logs/traces pipeline.
+The protected-store test could not run on this host because its process token is
+not elevated; hosted Windows Agent CI passed the protected-store integration
+step. Hosted PR checks passed for Fleet Go quality and Ubuntu/Windows tests,
+pinned Supervisor UID continuity on both OSes, Mongo-backed binding, and Core
+quality plus secret scanning:
+
+- Fleet: [Go quality run 45164475382](https://github.com/AR-IMMS/fleet-manager/actions/runs/45164475382), [Supervisor/Mongo run 45164475481](https://github.com/AR-IMMS/fleet-manager/actions/runs/45164475481).
+- Core: [CI run 45165256044](https://github.com/AR-IMMS/core-backend/actions/runs/45165256044).
+- Agent: [CI run 45164194747](https://github.com/AR-IMMS/telemetry-agent/actions/runs/45164194747).
+
+FM-01 remains IN PROGRESS; this evidence does not establish production
+readiness.
+
 ## FM-02 — Service authentication and authorization
 
 - [ ] Approve Core→Fleet service identity and delegated actor/target verification.
@@ -67,7 +102,8 @@ Acceptance: absent, invalid, expired/revoked or incorrectly scoped credentials c
 - [ ] Exchange invitations using durable installation UUID and enrollment attempt identity.
 - [ ] Persist recoverable outcomes and handle lost responses, replay and concurrent exchange safely.
 - [ ] Implement registry list/detail and installation/credential lifecycle records.
-- [ ] Implement revocation; implement credential replacement/rotation according to an approved delivery workflow.
+- [x] Implement Fleet-side idempotent credential revocation and session fencing.
+- [ ] Add Core-authorized revocation orchestration and implement credential replacement/rotation only after the delivery and recovery workflow is agreed.
 - [ ] Preserve the distinction between durable agent_id and host identity evidence; handle collisions without automatic merging.
 - [ ] Record Core-authorized binding without taking ownership of Asset/Node placement policy.
 
@@ -155,7 +191,7 @@ Use PLANNED, IN_PROGRESS, BLOCKED, DONE for implementation. Separately record PA
 
 | Checkpoint | Source commit | Test / CI link | Environment | Result | Limits / follow-up |
 |---|---|---|---|---|---|
-| FM-01 Mongo migrations/indexes | Working tree (not committed) | Local race-enabled Mongo + pinned-Supervisor commands recorded in identity architecture doc | `.env.local` Mongo; Supervisor v0.160.0 on Windows | PASS locally | Hosted workflow pending; Mongo minimum version and production HA/backup/failover topology OPEN |
+| FM-01 Mongo migrations/indexes | `b555d5a0c58c285bec749381df70840a5d65cafd` | Local race-enabled Mongo and pinned Supervisor checks; [hosted Supervisor/Mongo run 45164475481](https://github.com/AR-IMMS/fleet-manager/actions/runs/45164475481) | Local replica set; Supervisor v0.160.0 on Windows; hosted Ubuntu/Windows | PASS locally and hosted | Mongo minimum version and production HA/backup/failover topology OPEN |
 
 ## Deferred baseline scope
 

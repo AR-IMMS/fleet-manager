@@ -25,6 +25,7 @@ func TestMigrateAndEnsureIndexesHaveSeparateLifecycles(t *testing.T) {
 	}
 	assertMigrationApplied(t, ctx, database)
 	assertIndexNames(t, ctx, database.Collection(collectionName), []string{"_id_"})
+	assertIndexNames(t, ctx, database.Collection(invitationsCollectionName), []string{"_id_"})
 	if _, err := NewVerifier(database); err != nil {
 		t.Fatal("construct verifier without schema side effects", err)
 	}
@@ -34,9 +35,16 @@ func TestMigrateAndEnsureIndexesHaveSeparateLifecycles(t *testing.T) {
 		t.Fatal("reconcile identity indexes", err)
 	}
 	assertIndexNames(t, ctx, database.Collection(collectionName), []string{
-		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1", "instance_uid_1",
+		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1", "instance_uid_1", "node_id_1",
 	})
 	assertIdentityIndexOptions(t, ctx, database.Collection(collectionName))
+	assertIndexNames(t, ctx, database.Collection(invitationsCollectionName), []string{
+		"_id_", "core_principal_id_1_idempotency_hash_1", "invitation_id_1", "operation_id_1", "token_hash_1",
+	})
+	assertIndexNames(t, ctx, database.Collection(invitationEscrowName), []string{"_id_", "expires_at_1"})
+	assertIndexNames(t, ctx, database.Collection(attemptsCollectionName), []string{
+		"_id_", "agent_id_1", "attempt_id_1", "expires_at_1",
+	})
 	if err := database.Collection(collectionName).Indexes().DropOne(ctx, "agent_id_1"); err != nil {
 		t.Fatal("remove index to verify startup reconciliation", err)
 	}
@@ -45,13 +53,13 @@ func TestMigrateAndEnsureIndexesHaveSeparateLifecycles(t *testing.T) {
 		t.Fatal("reapply identity migration", err)
 	}
 	assertIndexNames(t, ctx, database.Collection(collectionName), []string{
-		"_id_", "credential_hash_1", "credential_id_1", "instance_uid_1",
+		"_id_", "credential_hash_1", "credential_id_1", "instance_uid_1", "node_id_1",
 	})
 	if err := EnsureIndexes(ctx, database); err != nil {
 		t.Fatal("reconcile identity indexes on subsequent startup", err)
 	}
 	assertIndexNames(t, ctx, database.Collection(collectionName), []string{
-		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1", "instance_uid_1",
+		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1", "instance_uid_1", "node_id_1",
 	})
 }
 
@@ -121,6 +129,33 @@ func TestEnsureIndexesFailsClosedOnDuplicateLegacyValues(t *testing.T) {
 	}
 }
 
+func TestEnsureIndexesKeepsLegacyIdempotencyIndexWhenCoreScopedDataConflicts(t *testing.T) {
+	ctx, database := newMigrationTestDatabase(t)
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal("apply schema migration", err)
+	}
+	collection := database.Collection(invitationsCollectionName)
+	legacyIndex := "actor_id_1_idempotency_hash_1"
+	if _, err := collection.Indexes().CreateOne(ctx, driver.IndexModel{
+		Keys:    bson.D{{Key: "actor_id", Value: 1}, {Key: "idempotency_hash", Value: 1}},
+		Options: options.Index().SetName(legacyIndex).SetUnique(true),
+	}); err != nil {
+		t.Fatal("create legacy actor-scoped idempotency index", err)
+	}
+	if _, err := collection.InsertMany(ctx, []any{
+		bson.M{"_id": "legacy-a", "operation_id": "legacy-op-a", "core_principal_id": "core-service", "idempotency_hash": "same-key-hash", "actor_id": "human-a"},
+		bson.M{"_id": "legacy-b", "operation_id": "legacy-op-b", "core_principal_id": "core-service", "idempotency_hash": "same-key-hash", "actor_id": "human-b"},
+	}); err != nil {
+		t.Fatal("seed data that conflicts with Core-scoped uniqueness but satisfies legacy index", err)
+	}
+	if err := EnsureIndexes(ctx, database); err == nil {
+		t.Fatal("index reconciliation must fail closed on conflicting Core-scoped idempotency data")
+	}
+	if !indexExists(t, ctx, collection, legacyIndex) {
+		t.Fatal("failed Core-scoped index creation must retain the legacy index")
+	}
+}
+
 func TestMigrateRejectsChangedAppliedMigration(t *testing.T) {
 	ctx, database := newMigrationTestDatabase(t)
 	if err := Migrate(ctx, database); err != nil {
@@ -152,7 +187,9 @@ func newMigrationTestDatabase(t *testing.T) (context.Context, *driver.Database) 
 	if err != nil {
 		t.Fatal("connect MongoDB", err)
 	}
-	database := client.Database("fleet_identity_migrations_test_" + strconv.FormatInt(time.Now().UnixNano(), 10))
+	databaseName := "fleet_identity_migrations_test_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	database := client.Database(databaseName)
+	t.Logf("Mongo integration database: %s (dropped by test cleanup)", databaseName)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
@@ -183,6 +220,13 @@ func assertMigrationApplied(t *testing.T, ctx context.Context, database *driver.
 	if record.ID != identityBaselineMigrationID || record.Checksum != identityBaselineMigrationHash || record.Applied.IsZero() {
 		t.Fatalf("migration history record is incomplete: %+v", record)
 	}
+	var enrollmentMigration migrationRecord
+	if err := database.Collection(migrationsCollectionName).FindOne(ctx, bson.M{"_id": enrollmentMigrationID}).Decode(&enrollmentMigration); err != nil {
+		t.Fatal("read enrollment migration history", err)
+	}
+	if enrollmentMigration.Checksum != enrollmentMigrationHash || enrollmentMigration.AppliedAt.IsZero() {
+		t.Fatalf("enrollment migration history record is incomplete: %+v", enrollmentMigration)
+	}
 }
 
 func assertIdentityIndexOptions(t *testing.T, ctx context.Context, collection *driver.Collection) {
@@ -209,6 +253,14 @@ func assertIdentityIndexOptions(t *testing.T, ctx context.Context, collection *d
 			filterType, typeOK := documentValue(condition, "$type").(string)
 			if !ok || !conditionOK || !typeOK || filterType != "string" {
 				t.Errorf("instance UID index has wrong partial filter: %#v", documentValue(index, "partialFilterExpression"))
+			}
+		}
+		if name == "node_id_1" {
+			partial, ok := documentValue(index, "partialFilterExpression").(bson.D)
+			condition, conditionOK := documentValue(partial, "node_id").(bson.D)
+			filterType, typeOK := documentValue(condition, "$type").(string)
+			if !ok || !conditionOK || !typeOK || filterType != "string" {
+				t.Errorf("Node ID index has wrong partial filter: %#v", documentValue(index, "partialFilterExpression"))
 			}
 		}
 	}
@@ -244,4 +296,27 @@ func assertIndexNames(t *testing.T, ctx context.Context, collection *driver.Coll
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("index names = %v, want %v", got, want)
 	}
+}
+
+func indexExists(t *testing.T, ctx context.Context, collection *driver.Collection, name string) bool {
+	t.Helper()
+	cursor, err := collection.Indexes().List(ctx)
+	if err != nil {
+		t.Fatal("list collection indexes", err)
+	}
+	var indexes []struct {
+		Name string `bson:"name"`
+	}
+	if err := cursor.All(ctx, &indexes); err != nil {
+		t.Fatal("decode collection indexes", err)
+	}
+	if err := cursor.Close(ctx); err != nil {
+		t.Fatal("close collection index cursor", err)
+	}
+	for _, index := range indexes {
+		if index.Name == name {
+			return true
+		}
+	}
+	return false
 }

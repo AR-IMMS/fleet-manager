@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -19,6 +20,7 @@ var errInvalidCredentialRecord = errors.New("identity credential record is inval
 
 type record struct {
 	AgentID        string `bson:"agent_id"`
+	NodeID         string `bson:"node_id,omitempty"`
 	CredentialID   string `bson:"credential_id"`
 	CredentialHash string `bson:"credential_hash"`
 	Status         string `bson:"status"`
@@ -38,15 +40,32 @@ func (v *Verifier) StoreActiveCredential(
 	ctx context.Context,
 	agentID, credentialID, credential string,
 ) error {
+	return v.storeCredentialWithContext(ctx, agentID, credentialID, credential)
+}
+
+func (v *Verifier) storeCredentialWithContext(
+	ctx context.Context,
+	agentID, credentialID, credential string,
+) error {
+	return v.storeCredentialForNode(ctx, agentID, "", credentialID, credential)
+}
+
+func (v *Verifier) storeCredentialForNode(
+	ctx context.Context,
+	agentID, nodeID, credentialID, credential string,
+) error {
 	principal, err := domain.NewPrincipal(agentID, credentialID)
-	if err != nil || credential == "" || len(credential) < 32 {
+	if err != nil || credential == "" || len(credential) < 32 || (nodeID != "" && nodeID != strings.TrimSpace(nodeID)) {
 		return errInvalidCredentialRecord
 	}
 	_, err = v.collection.InsertOne(ctx, record{
-		AgentID: principal.InstallationID(), CredentialID: principal.CredentialID(),
+		AgentID: principal.InstallationID(), NodeID: nodeID, CredentialID: principal.CredentialID(),
 		CredentialHash: digest(credential), Status: "ACTIVE",
 	})
 	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return domain.ErrEnrollmentConflict
+		}
 		return domain.ErrIdentityUnavailable
 	}
 	return nil
@@ -144,6 +163,28 @@ func (v *Verifier) Revoke(ctx context.Context, credentialID string) error {
 	}
 	if result.MatchedCount == 0 {
 		return errRecordNotFound
+	}
+	return nil
+}
+
+// RevokeAgent atomically fences every active credential for an installation.
+func (v *Verifier) RevokeAgent(ctx context.Context, agentID string) error {
+	if strings.TrimSpace(agentID) == "" || strings.TrimSpace(agentID) != agentID {
+		return domain.ErrEnrollmentConflict
+	}
+	result, err := v.collection.UpdateMany(ctx, bson.M{"agent_id": agentID, "status": "ACTIVE"}, bson.M{"$set": bson.M{"status": "REVOKED"}})
+	if err != nil {
+		return domain.ErrIdentityUnavailable
+	}
+	if result.MatchedCount > 0 {
+		return nil
+	}
+	count, err := v.collection.CountDocuments(ctx, bson.M{"agent_id": agentID})
+	if err != nil {
+		return domain.ErrIdentityUnavailable
+	}
+	if count == 0 {
+		return domain.ErrEnrollmentNotFound
 	}
 	return nil
 }

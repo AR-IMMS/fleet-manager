@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/AR-IMMS/fleet-manager/internal/app"
-	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain"
+	identityapp "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/application"
 	identitymongo "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/infrastructure/mongodb"
 	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -40,12 +40,41 @@ func TestApplicationRunStartsAuthenticatedOpAMPAndShutsDown(t *testing.T) {
 	if err := identitymongo.EnsureIndexes(ctx, database); err != nil {
 		t.Fatal("reconcile test identity indexes", err)
 	}
+	store, err := identitymongo.NewEnrollmentStore(database, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal("create enrollment store", err)
+	}
+	if err := store.VerifyTransactionSupport(ctx); err != nil {
+		t.Fatal("verify enrollment transaction support", err)
+	}
+	enrollment := identityapp.EnrollmentService{
+		Store: store, DefaultInviteTTL: 10 * time.Minute, MaximumInviteTTL: time.Hour,
+		RecoveryTTL: 24 * time.Hour, OpAMPEndpoint: "wss://fleet.example.test/v1/opamp",
+	}
+	agentID := "supervisor-enrolled-agent-" + uuid.NewString()
+	invitation, err := enrollment.CreateInvitation(ctx, identityapp.CreateInvitationCommand{
+		OperationID:     "supervisor-enrollment-" + uuid.NewString(),
+		CorePrincipalID: "fleet-application-integration",
+		IdempotencyKey:  "supervisor-idempotency-" + uuid.NewString(),
+		ActorID:         "core-service", NodeID: "supervisor-node-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal("create test enrollment invitation", err)
+	}
+	issued, err := enrollment.Exchange(ctx, identityapp.ExchangeInvitationCommand{
+		AttemptID: "supervisor-attempt-" + uuid.NewString(), AgentID: agentID,
+		InvitationToken: invitation.Secret, RecoveryProof: "supervisor-recovery-proof-01234567890123456789012345",
+	})
+	if err != nil {
+		t.Fatal("exchange test enrollment invitation", err)
+	}
 	verifier, err := identitymongo.NewVerifier(database)
 	if err != nil {
 		t.Fatal("create verifier", err)
 	}
-	if err := verifier.StoreActiveCredential(ctx, testAgentID, testCredentialID, testCredential); err != nil {
-		t.Fatal("seed test credential", err)
+	principal, err := verifier.Verify(ctx, issued.Credential)
+	if err != nil {
+		t.Fatal("verify issued enrollment credential", err)
 	}
 
 	opampAddress := reserveLoopbackAddress(t)
@@ -79,14 +108,14 @@ func TestApplicationRunStartsAuthenticatedOpAMPAndShutsDown(t *testing.T) {
 	assertHealth(t, "http://"+httpAddress+"/health/ready", http.StatusOK)
 
 	endpoint := (&url.URL{Scheme: "ws", Host: opampAddress, Path: cfg.OpAMPPath}).String()
-	supervisor := h.start(t, endpoint, filepath.Join(h.root, "application-state"))
+	supervisor := h.startWithCredential(t, endpoint, filepath.Join(h.root, "application-state"), issued.Credential)
 	_ = supervisor
-	uid := waitForMongoBinding(t, ctx, database.Collection("identity_installations"))
+	uid := waitForMongoBinding(t, ctx, database.Collection("identity_installations"), agentID, issued.CredentialID)
 	decodedUID, err := hex.DecodeString(uid)
 	if err != nil || len(decodedUID) != 16 {
 		t.Fatalf("stored Supervisor UID is not a 16-byte UID: %q", uid)
 	}
-	if _, err := verifier.Verify(ctx, testCredential); err != nil {
+	if _, err := verifier.Verify(ctx, issued.Credential); err != nil {
 		t.Fatalf("authenticated Supervisor credential was not accepted: %v", err)
 	}
 
@@ -102,7 +131,7 @@ func TestApplicationRunStartsAuthenticatedOpAMPAndShutsDown(t *testing.T) {
 
 	assertAddressReleased(t, httpAddress)
 	assertAddressReleased(t, opampAddress)
-	if err := verifier.BindAndAuthorize(ctx, mustPrincipal(t), decodedUID); err != nil {
+	if err := verifier.BindAndAuthorize(ctx, principal, decodedUID); err != nil {
 		t.Fatalf("shutdown changed the persisted authenticated UID binding: %v", err)
 	}
 	if err := client.Ping(ctx, readpref.Primary()); err != nil {
@@ -266,7 +295,7 @@ func assertHealth(t *testing.T, endpoint string, expected int) {
 	}
 }
 
-func waitForMongoBinding(t *testing.T, ctx context.Context, collection *driver.Collection) string {
+func waitForMongoBinding(t *testing.T, ctx context.Context, collection *driver.Collection, agentID, credentialID string) string {
 	t.Helper()
 	deadline := time.NewTicker(100 * time.Millisecond)
 	defer deadline.Stop()
@@ -274,7 +303,7 @@ func waitForMongoBinding(t *testing.T, ctx context.Context, collection *driver.C
 	defer timer.Stop()
 	for {
 		var record bson.M
-		err := collection.FindOne(ctx, bson.M{"agent_id": testAgentID, "credential_id": testCredentialID}).Decode(&record)
+		err := collection.FindOne(ctx, bson.M{"agent_id": agentID, "credential_id": credentialID}).Decode(&record)
 		if err == nil {
 			if uid, ok := record["instance_uid"].(string); ok && uid != "" {
 				return uid
@@ -290,15 +319,6 @@ func waitForMongoBinding(t *testing.T, ctx context.Context, collection *driver.C
 		case <-deadline.C:
 		}
 	}
-}
-
-func mustPrincipal(t *testing.T) domain.Principal {
-	t.Helper()
-	principal, err := domain.NewPrincipal(testAgentID, testCredentialID)
-	if err != nil {
-		t.Fatal("construct expected principal", err)
-	}
-	return principal
 }
 
 func assertAddressReleased(t *testing.T, address string) {

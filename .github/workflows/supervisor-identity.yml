@@ -58,41 +58,50 @@ jobs:
     name: Fleet binding with MongoDB (Ubuntu)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    services:
-      mongodb:
-        image: mongo:8.0
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping: 1})'"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+      - name: Start MongoDB replica set for transactions
+        run: |
+          set -euo pipefail
+          docker run -d --name fleet-mongodb -p 27017:27017 mongo:8.0 mongod --replSet rs0 --bind_ip_all
+          for attempt in $(seq 1 60); do
+            if docker exec fleet-mongodb mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec fleet-mongodb mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]})'
+          for attempt in $(seq 1 60); do
+            if docker exec fleet-mongodb mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MongoDB replica set did not become primary" >&2
+          exit 1
       - name: Download and verify pinned Supervisor
         run: bash scripts/ci/install-opampsupervisor.sh
       - name: Build test Collector process
         run: go build -o "$RUNNER_TEMP/fleet-test-collector" ./tests/supervisor/fakecollector
       - name: Mongo identity binding and revocation fence
         env:
-          FLEET_MONGODB_URI: mongodb://127.0.0.1:27017
+          FLEET_MONGODB_URI: mongodb://127.0.0.1:27017/?replicaSet=rs0
           FLEET_REQUIRE_INTEGRATION: "true"
         run: go test -race -tags=integration -timeout=3m -count=1 -v ./internal/contexts/identity/infrastructure/mongodb
       - name: Check Fleet reconnect and fresh-state conflict
         env:
-          FLEET_MONGODB_URI: mongodb://127.0.0.1:27017
+          FLEET_MONGODB_URI: mongodb://127.0.0.1:27017/?replicaSet=rs0
           FLEET_REQUIRE_INTEGRATION: "true"
           FLEET_TEST_COLLECTOR_BIN: ${{ runner.temp }}/fleet-test-collector
           SUPERVISOR_TEST_LOG_DIR: ${{ runner.temp }}/supervisor-test-logs
         run: go test -tags=supervisor,integration -timeout=8m -count=1 -v ./tests/supervisor -run '^TestSupervisorFleetUIDBindingAndFreshStateConflict$'
       - name: Application wiring with Mongo and pinned Supervisor
         env:
-          FLEET_MONGODB_URI: mongodb://127.0.0.1:27017
+          FLEET_MONGODB_URI: mongodb://127.0.0.1:27017/?replicaSet=rs0
           FLEET_REQUIRE_INTEGRATION: "true"
           FLEET_TEST_COLLECTOR_BIN: ${{ runner.temp }}/fleet-test-collector
           SUPERVISOR_TEST_LOG_DIR: ${{ runner.temp }}/supervisor-test-logs
@@ -105,3 +114,6 @@ jobs:
           path: ${{ runner.temp }}/supervisor-test-logs/supervisor-test.log
           if-no-files-found: ignore
           retention-days: 7
+      - name: Remove MongoDB replica set
+        if: always()
+        run: docker rm -f fleet-mongodb || true

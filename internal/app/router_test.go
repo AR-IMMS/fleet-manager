@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/AR-IMMS/fleet-manager/internal/platform/httpapi"
 )
 
 // readinessFunc supplies focused readiness behavior for router tests.
@@ -97,5 +99,19 @@ func TestRouterRejectsUnsupportedMethod(t *testing.T) {
 
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", response.Code)
+	}
+}
+
+func TestRouterReturnsRequestIDHeader(t *testing.T) {
+	router, err := newRouter(readinessFunc(func(context.Context) error { return nil }), time.Second)
+	if err != nil {
+		t.Fatalf("construct router: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/health/live", nil)
+	request.Header.Set(httpapi.RequestIDHeader, "router-request-01")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if got := response.Header().Get(httpapi.RequestIDHeader); got != "router-request-01" {
+		t.Fatalf("request ID response header = %q", got)
 	}
 }

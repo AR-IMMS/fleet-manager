@@ -37,6 +37,9 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if cfg.Mongo.Database != "ar_imms_fleet" {
 		t.Fatalf("unexpected Mongo.Database: %q", cfg.Mongo.Database)
 	}
+	if cfg.Enrollment.Enabled {
+		t.Fatal("enrollment must default to disabled")
+	}
 }
 
 func TestLoadConfig_NilLookup(t *testing.T) {
@@ -111,6 +114,38 @@ func TestLoadConfig_ValidationRules(t *testing.T) {
 				"FLEET_LOG_FORMAT": "xml",
 			},
 			wantErr: "FLEET_LOG_FORMAT must be",
+		},
+		{
+			name: "enrollment requires a secret key",
+			env: map[string]string{
+				"FLEET_ENROLLMENT_ENABLED": "true",
+			},
+			wantErr: "enrollment requires a 32-byte encryption key",
+		},
+		{
+			name: "enrollment requires TLS and Core client CA",
+			env: map[string]string{
+				"FLEET_ENROLLMENT_ENABLED":        "true",
+				"FLEET_ENROLLMENT_ENCRYPTION_KEY": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY",
+				"FLEET_ENROLLMENT_CORE_CLIENT_CN": "fleet-core",
+				"FLEET_ENROLLMENT_OPAMP_ENDPOINT": "wss://fleet.example.test/v1/opamp",
+			},
+			wantErr: "enrollment requires HTTPS and a dedicated Core client CA",
+		},
+		{
+			name: "enrollment requires the secure OpAMP listener",
+			env: map[string]string{
+				"FLEET_ENROLLMENT_ENABLED":        "true",
+				"FLEET_ENROLLMENT_ENCRYPTION_KEY": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY",
+				"FLEET_ENROLLMENT_CORE_CLIENT_CN": "fleet-core",
+				"FLEET_ENROLLMENT_OPAMP_ENDPOINT": "wss://fleet.example.test/v1/opamp",
+				"FLEET_HTTP_TLS_CERT_FILE":        "http.crt",
+				"FLEET_HTTP_TLS_KEY_FILE":         "http.key",
+				"FLEET_HTTP_CLIENT_CA_FILE":       "core-ca.crt",
+				"OPAMP_TLS_CERT_FILE":             "opamp.crt",
+				"OPAMP_TLS_KEY_FILE":              "opamp.key",
+			},
+			wantErr: "enrollment requires the OpAMP listener to be enabled with TLS",
 		},
 	}
 
