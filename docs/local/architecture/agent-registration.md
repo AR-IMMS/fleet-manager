@@ -44,9 +44,12 @@ class Core {
   +getEnrollmentStatus(operationID)
 }
 class EnrollmentHTTP {
-  <<proposed wire adapter>>
+  <<provisional HTTP adapter>>
   +createInvitation(request)
-  +changeGate(request)
+  +cancelInvitation(invitationID, operationID)
+  +closeGate(nodeID, operationID)
+  +completeGate(nodeID, operationID, version, state)
+  +revokeAgent(agentID)
   +getStatus(operationID)
   +exchange(request)
   +recover(request)
@@ -55,14 +58,19 @@ class EnrollmentService {
   +CreateInvitation(command)
   +Exchange(command)
   +Recover(attemptID, proof)
-  +ChangeGate(command)
+  +CancelInvitation(invitationID, operationID)
+  +CloseGate(nodeID, operationID)
+  +CompleteGate(nodeID, operationID, version, state)
+  +RevokeAgent(agentID)
   +GetStatus(operationID)
 }
 class MongoEnrollmentStore {
   +CreateInvitation(invitation)
   +Enroll(attempt)
   +Recover(attemptID, proofHash)
-  +ChangeGate(command)
+  +CancelInvitation(invitationID, operationID)
+  +CloseGate(nodeID, operationID)
+  +CompleteGate(nodeID, operationID, version, state)
   +GetStatus(operationID)
 }
 class IdentityVerifier {
@@ -70,6 +78,7 @@ class IdentityVerifier {
   +Verify(credential)
   +BindAndAuthorize(agentID, instanceUID)
   +Revoke(credentialID)
+  +RevokeAgent(agentID)
 }
 class Agent {
   +exchangeInvitation()
@@ -122,7 +131,11 @@ responses/errors do not echo submitted secrets.
 | Route | Caller | Purpose |
 |---|---|---|
 | `POST /internal/v1/enrollment/invitations` | Core mTLS certificate with configured common name | Create or replay a pending invitation; body includes operation ID, idempotency key, Node ID, optional TTL seconds. |
-| `POST /internal/v1/enrollment/nodes/{node_id}/gate` | Core mTLS | Idempotently open or close the Node gate; body includes operation ID and status. |
+| `POST /internal/v1/enrollment/invitations/{invitation_id}/cancel` | Core mTLS | Cancel only a pending invitation when the operation ID matches the original create. |
+| `POST /internal/v1/nodes/{node_id}/enrollment-gate/close` | Core mTLS | Close the gate and return version, prior state, and active binding snapshot. |
+| `PUT /internal/v1/nodes/{node_id}/enrollment-gate` | Core mTLS | Commit CLOSED or restore prior state with the exact operation ID/version. |
+| `POST /internal/v1/agents/{agent_id}/revoke` | Core mTLS | Idempotently revoke active Fleet credentials; does not stop Collector. |
+| `POST /internal/v1/enrollment/nodes/{node_id}/gate` | Core mTLS | Legacy one-step gate route; reject while a two-phase transition is pending. |
 | `GET /internal/v1/enrollment/operations/{operation_id}` | Core mTLS | Return secret-free invitation/enrollment status for Core journal recovery. |
 | `POST /v1/enrollment/exchanges` | Agent over HTTPS | Exchange attempt ID, Agent ID, invitation token, and recovery proof for a Fleet credential and WSS endpoint. |
 | `POST /v1/enrollment/recoveries` | Agent over HTTPS | Recover the same credential using attempt ID, Agent ID, and recovery proof before escrow expiry. |
@@ -139,9 +152,9 @@ not commit them to `.env.local` or a deployment manifest.
 | Core authentication and actor attribution | mTLS with one configured certificate common name as actor | Agree on Core service/delegated actor claims, certificate rotation, and authorization freshness. |
 | Fleet routes and schemas | Provisional paths and JSON fields above | Approve exact C01 paths, headers, payloads, error codes, and status semantics across Core/Fleet/Agent. |
 | Idempotency | `(actor_id, idempotency-key hash)` plus operation fingerprint; pending secret replay ends on redemption/expiry | Confirm scope, retention, and response-loss behavior with Core. |
-| Agent recovery | Stable attempt ID plus separate 32-byte-minimum proof; encrypted response escrow expires after configured TTL | Confirm proof generation/storage and recovery window with Agent; Agent currently targets Core's legacy enrollment endpoint. |
-| Identity lifecycle | One active credential per `agent_id`; no implicit rebind | Define credential rotation, Agent reinstall/migration, cancellation, and duplicate Node/Agent policy. |
-| Core lifecycle gate | Idempotent OPEN/CLOSED operations; close response returns bound Agent IDs; same-document transaction serialization | Align close/finalize/restore semantics with Core's journal, including unknown transaction outcomes and races. |
+| Agent recovery | Stable attempt ID plus separate 32-byte-minimum proof; encrypted response escrow expires after configured TTL | Confirm proof generation/storage and recovery window with Agent; Fleet enrollment is an explicit Agent CLI mode while Core enrollment remains the default. |
+| Identity lifecycle | One active credential per `agent_id`; no implicit rebind | Define credential rotation and recovery delivery, Agent reinstall/migration, revoke authorization/idempotency, and duplicate Node/Agent policy. Cancellation and two-phase gate behavior are implemented but remain provisional cross-service contract details. |
+| Core lifecycle gate | Close returns a versioned prior-state and active-binding snapshot; completion commits or compensates only the matching operation/version. | Agree on exact wire/status semantics and Core recovery behavior for unknown outcomes and races. |
 | Supervisor continuity | Existing verifier requires the authenticated Agent's pinned UID | Production use still depends on cross-system security and contract review. |
 | Secret key management | Static 32-byte AES key supplied by environment, not logged or serialized | Select production secret-manager source, rotation/versioning, backup and key-loss recovery. |
 
@@ -169,7 +182,8 @@ Verified locally on 2026-11-23:
 Still open before calling cross-system Agent Registration complete:
 
 - A coordinated Agent adapter and Core/Fleet contract review. The current
-  Agent `dev` branch still posts to Core's legacy enrollment API, so the
-  provisional Fleet routes are not yet interoperable with it.
+  Agent keeps Core enrollment as its default and has an explicit Fleet enrollment
+  CLI path. Local UAT and tests do not approve the shared wire proposal or enable
+  production OpAMP.
 - Hosted CI evidence. Local checks passed; no hosted run has been executed for
   this branch yet.
