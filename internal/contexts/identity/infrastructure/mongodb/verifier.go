@@ -34,6 +34,7 @@ type record struct {
 // instance UID binding. One Mongo document is the concurrency boundary for both.
 type Verifier struct {
 	collection *mongo.Collection
+	client     *mongo.Client
 }
 
 // StoreActiveCredential persists an enrollment-issued token digest and its
@@ -88,7 +89,7 @@ func NewVerifier(database *mongo.Database) (*Verifier, error) {
 	if database == nil {
 		return nil, fmt.Errorf("identity database is required")
 	}
-	return &Verifier{collection: database.Collection(collectionName)}, nil
+	return &Verifier{collection: database.Collection(collectionName), client: database.Client()}, nil
 }
 
 // Verify resolves an active high-entropy credential without retaining or logging it.
@@ -208,24 +209,42 @@ func (v *Verifier) Revoke(ctx context.Context, credentialID string) error {
 	return nil
 }
 
-// RevokeAgent atomically fences every active credential for an installation.
+// RevokeAgent commits the OpAMP and OTLP credential fences together.
 func (v *Verifier) RevokeAgent(ctx context.Context, agentID string) error {
 	if strings.TrimSpace(agentID) == "" || strings.TrimSpace(agentID) != agentID {
 		return domain.ErrEnrollmentConflict
 	}
-	result, err := v.collection.UpdateMany(ctx, bson.M{"agent_id": agentID, "status": "ACTIVE"}, bson.M{"$set": bson.M{"status": "REVOKED"}})
+	if v.client == nil {
+		return domain.ErrIdentityUnavailable
+	}
+	session, err := v.client.StartSession()
 	if err != nil {
 		return domain.ErrIdentityUnavailable
 	}
-	if result.MatchedCount > 0 {
-		return nil
+	defer session.EndSession(ctx)
+	_, err = session.WithTransaction(ctx, func(txCtx context.Context) (any, error) {
+		result, updateErr := v.collection.UpdateMany(txCtx,
+			bson.M{"agent_id": agentID, "status": "ACTIVE"}, bson.M{"$set": bson.M{"status": "REVOKED"}})
+		if updateErr != nil {
+			return nil, updateErr
+		}
+		if result.MatchedCount > 0 {
+			return nil, nil
+		}
+		count, countErr := v.collection.CountDocuments(txCtx, bson.M{"agent_id": agentID})
+		if countErr != nil {
+			return nil, countErr
+		}
+		if count == 0 {
+			return nil, domain.ErrEnrollmentNotFound
+		}
+		return nil, nil
+	})
+	if errors.Is(err, domain.ErrEnrollmentNotFound) {
+		return err
 	}
-	count, err := v.collection.CountDocuments(ctx, bson.M{"agent_id": agentID})
 	if err != nil {
 		return domain.ErrIdentityUnavailable
-	}
-	if count == 0 {
-		return domain.ErrEnrollmentNotFound
 	}
 	return nil
 }
