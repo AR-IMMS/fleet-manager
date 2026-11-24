@@ -170,15 +170,21 @@ func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
 	if first.CredentialID != replayed.CredentialID || first.Credential != replayed.Credential || first.NodeID != replayed.NodeID {
 		t.Fatal("same attempt must recover its exact original response")
 	}
-	if first.OTLPCredential == nil || replayed.OTLPCredential == nil || *first.OTLPCredential != *replayed.OTLPCredential {
+	if !sameOTLPCredential(first.OTLPCredential, replayed.OTLPCredential) {
 		t.Fatal("same attempt must replay its separate OTLP credential")
 	}
 	if _, err := store.verifier.VerifyOTLP(ctx, first.Credential); !errors.Is(err, domain.ErrCredentialRejected) {
 		t.Fatalf("OpAMP token accepted for OTLP: %v", err)
 	}
 	identity, err := store.verifier.VerifyOTLP(ctx, first.OTLPCredential.Token)
-	if err != nil || identity.AgentID != command.AgentID || identity.Scope != "otlp.write" {
+	if err != nil || identity.AgentID != command.AgentID || identity.Scope != "otlp.write" || identity.ExpiresAt == nil || !identity.ExpiresAt.After(time.Now()) {
 		t.Fatalf("OTLP credential verification identity=%+v err=%v", identity, err)
+	}
+	if _, err := database.Collection(collectionName).UpdateOne(ctx, bson.M{"credential_id": first.OTLPCredential.ID}, bson.M{"$set": bson.M{"expires_at": time.Now().Add(-time.Second)}}); err != nil {
+		t.Fatal("expire OTLP credential fixture", err)
+	}
+	if _, err := store.verifier.VerifyOTLP(ctx, first.OTLPCredential.Token); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("expired OTLP credential error=%v", err)
 	}
 	if _, err := store.verifier.Verify(ctx, first.OTLPCredential.Token); !errors.Is(err, domain.ErrCredentialRejected) {
 		t.Fatalf("OTLP token accepted for OpAMP: %v", err)
@@ -199,7 +205,7 @@ func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
 	if recovered.Credential != first.Credential || recovered.CredentialID != first.CredentialID {
 		t.Fatal("recovery after restart must return the original credential")
 	}
-	if recovered.OTLPCredential == nil || *recovered.OTLPCredential != *first.OTLPCredential {
+	if !sameOTLPCredential(recovered.OTLPCredential, first.OTLPCredential) {
 		t.Fatal("recovery after restart must return the original OTLP credential")
 	}
 	status, err := service.GetStatus(ctx, invitation.OperationID)
@@ -280,6 +286,16 @@ func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
 	}); !errors.Is(err, domain.ErrInvitationRejected) {
 		t.Fatalf("closed gate should reject new invitations, got %v", err)
 	}
+}
+
+func sameOTLPCredential(left, right *domain.OTLPCredential) bool {
+	if left == nil || right == nil || left.ID != right.ID || left.Token != right.Token || left.Scope != right.Scope {
+		return false
+	}
+	if left.ExpiresAt == nil || right.ExpiresAt == nil {
+		return left.ExpiresAt == nil && right.ExpiresAt == nil
+	}
+	return left.ExpiresAt.UnixMilli() == right.ExpiresAt.UnixMilli()
 }
 
 func TestExpiredInvitationExchangeReturnsExpiredError(t *testing.T) {

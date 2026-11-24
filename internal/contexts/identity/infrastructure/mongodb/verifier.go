@@ -65,6 +65,14 @@ func (v *Verifier) storeScopedCredentialForNode(
 	ctx context.Context,
 	agentID, nodeID, credentialID, credential, scope string,
 ) error {
+	return v.storeScopedCredentialForNodeWithExpiry(ctx, agentID, nodeID, credentialID, credential, scope, nil)
+}
+
+func (v *Verifier) storeScopedCredentialForNodeWithExpiry(
+	ctx context.Context,
+	agentID, nodeID, credentialID, credential, scope string,
+	expiresAt *time.Time,
+) error {
 	principal, err := domain.NewPrincipal(agentID, credentialID)
 	if err != nil || credential == "" || len(credential) < 32 || (nodeID != "" && nodeID != strings.TrimSpace(nodeID)) ||
 		(scope != "opamp.connect" && scope != "otlp.write") {
@@ -72,7 +80,7 @@ func (v *Verifier) storeScopedCredentialForNode(
 	}
 	_, err = v.collection.InsertOne(ctx, record{
 		AgentID: principal.InstallationID(), NodeID: nodeID, CredentialID: principal.CredentialID(),
-		CredentialHash: digest(credential), Scope: scope, Status: "ACTIVE",
+		CredentialHash: digest(credential), Scope: scope, ExpiresAt: expiresAt, Status: "ACTIVE",
 	})
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {

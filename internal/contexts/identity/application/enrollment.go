@@ -161,6 +161,7 @@ func (s EnrollmentService) Exchange(
 	if err != nil {
 		return domain.EnrollmentResult{}, fmt.Errorf("generate OTLP credential: %w", err)
 	}
+	otlpExpiry := s.now().Add(90 * 24 * time.Hour)
 	attempt := domain.EnrollmentAttempt{
 		AttemptID:           command.AttemptID,
 		AgentID:             command.AgentID,
@@ -172,7 +173,7 @@ func (s EnrollmentService) Exchange(
 			CredentialID:   credentialID,
 			Credential:     credential,
 			OpAMPEndpoint:  s.OpAMPEndpoint,
-			OTLPCredential: &domain.OTLPCredential{ID: otlpCredentialID, Token: otlpCredential, Scope: "otlp.write"},
+			OTLPCredential: &domain.OTLPCredential{ID: otlpCredentialID, Token: otlpCredential, Scope: "otlp.write", ExpiresAt: &otlpExpiry},
 		},
 	}
 	return s.Store.Enroll(ctx, attempt)

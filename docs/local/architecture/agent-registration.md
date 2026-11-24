@@ -31,7 +31,8 @@ are resolved.
    the Supervisor `instance_uid` to the separately owned `agent_id`.
 7. After enrollment, the Collector sends TLS OTLP/HTTP JSON through the Agent
    ingress. Fleet introspects that separate `otlp.write` bearer on each request
-   using the ingress's dedicated mTLS certificate identity. The response maps
+   using the ingress's dedicated mTLS certificate identity. The credential
+   expires after 90 days. The response maps
    the credential to `agent_id` without returning the secret; Fleet outage or
    invalid/revoked credentials fail closed.
 
