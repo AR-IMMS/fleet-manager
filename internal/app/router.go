@@ -19,6 +19,7 @@ import (
 func newRouter(
 	checker httpserver.ReadinessChecker,
 	readinessTimeout time.Duration,
+	docsEnabled bool,
 	enrollmentHandlers ...*identityhttp.EnrollmentHandler,
 ) (http.Handler, error) {
 	health, err := httpserver.NewHealthHandler(checker, readinessTimeout)
@@ -35,6 +36,14 @@ func newRouter(
 		if handler != nil {
 			handler.Mount(router)
 		}
+	}
+	if docsEnabled {
+		docs := httpapi.NewAPIDocs()
+		router.Get("/openapi.yaml", docs.Spec)
+		router.Get("/docs", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/docs/", http.StatusTemporaryRedirect)
+		})
+		router.Handle("/docs/*", docs.UI())
 	}
 
 	return router, nil

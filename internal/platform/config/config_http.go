@@ -18,6 +18,7 @@ type HTTPConfig struct {
 	TLSCertFile       string        `json:"tls_cert_file" yaml:"tls_cert_file"`
 	TLSKeyFile        string        `json:"tls_key_file" yaml:"tls_key_file"`
 	ClientCAFile      string        `json:"client_ca_file" yaml:"client_ca_file"`
+	APIDocsEnabled    bool          `json:"api_docs_enabled" yaml:"api_docs_enabled"`
 	ReadHeaderTimeout time.Duration `json:"read_header_timeout" yaml:"read_header_timeout"`
 	ReadTimeout       time.Duration `json:"read_timeout" yaml:"read_timeout"`
 	WriteTimeout      time.Duration `json:"write_timeout" yaml:"write_timeout"`
@@ -43,6 +44,14 @@ func loadHTTPConfig(reader env.Reader) (HTTPConfig, error) {
 	cfg.TLSCertFile = reader.Optional("FLEET_HTTP_TLS_CERT_FILE")
 	cfg.TLSKeyFile = reader.Optional("FLEET_HTTP_TLS_KEY_FILE")
 	cfg.ClientCAFile = reader.Optional("FLEET_HTTP_CLIENT_CA_FILE")
+	docsEnabled, err := reader.Setting("FLEET_API_DOCS_ENABLED", "false")
+	if err != nil {
+		return HTTPConfig{}, err
+	}
+	cfg.APIDocsEnabled, err = strconv.ParseBool(docsEnabled)
+	if err != nil {
+		return HTTPConfig{}, fmt.Errorf("FLEET_API_DOCS_ENABLED must be a boolean")
+	}
 
 	cfg.ReadHeaderTimeout, err = reader.Duration(
 		"FLEET_HTTP_READ_HEADER_TIMEOUT",

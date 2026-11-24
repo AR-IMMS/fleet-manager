@@ -134,6 +134,7 @@ func wireRuntime(
 	router, err := newRouter(
 		runtime.readiness,
 		cfg.HTTP.ReadinessTimeout,
+		cfg.HTTP.APIDocsEnabled,
 		enrollmentHandlers...,
 	)
 	if err != nil {

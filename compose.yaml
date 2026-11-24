@@ -12,6 +12,7 @@ services:
 
     environment:
       FLEET_HTTP_LISTEN_ADDRESS: 0.0.0.0:18081
+      FLEET_API_DOCS_ENABLED: ${FLEET_API_DOCS_ENABLED:-false}
       FLEET_MONGODB_URI: mongodb://mongodb:27017/?directConnection=true
       FLEET_MONGODB_DATABASE: ar_imms_fleet
       FLEET_LOG_FORMAT: json

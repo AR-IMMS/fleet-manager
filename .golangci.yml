@@ -208,6 +208,7 @@ linters:
             - google.golang.org/grpc
             - github.com/go-playground/validator/v10
             - github.com/google/uuid
+            - github.com/swaggest/swgui/v5emb
             - go.mongodb.org/mongo-driver
           deny:
             - pkg: github.com/AR-IMMS/fleet-manager/internal/app

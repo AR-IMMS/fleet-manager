@@ -1,0 +1,353 @@
+openapi: 3.1.0
+info:
+  title: Fleet Management API
+  version: 0.1.0-provisional
+  description: |
+    Describes the Fleet HTTP routes present in this build. Enrollment wire
+    details remain provisional and are not an approved cross-repository
+    contract. This document does not describe Core-owned public APIs.
+servers:
+  - url: /
+    description: Current Fleet HTTP origin
+tags:
+  - name: Health
+  - name: Enrollment (provisional)
+  - name: Core administration (provisional)
+paths:
+  /health/live:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      responses:
+        '200':
+          description: Process is live
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthStatus' }
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness check
+      responses:
+        '200':
+          description: Required runtime dependencies are ready
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthStatus' }
+        '503':
+          description: A required dependency is unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthStatus' }
+  /internal/v1/enrollment/invitations:
+    post:
+      tags: [Core administration (provisional)]
+      summary: Create or replay an enrollment invitation
+      description: Requires a verified Core client certificate with the configured common name. The raw invitation token is returned only in the response.
+      security: [{ CoreClientCertificate: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OperationID' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/ActorID' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateInvitationRequest' }
+            example: { schema_version: 1, operation_id: '7ee1d0a0-1ab2-4a30-82ca-84c9c8f1fb62', node_id: 'a3cb4e2c-15c1-4c3d-8cc9-110a47ac7001', requested_ttl_seconds: 600 }
+      responses:
+        '201':
+          description: Invitation created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Invitation' }
+        '200': { description: Canonical invitation replayed }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /internal/v1/enrollment/invitations/{invitation_id}/cancel:
+    post:
+      tags: [Core administration (provisional)]
+      summary: Cancel a pending invitation
+      security: [{ CoreClientCertificate: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/InvitationID' }
+        - { $ref: '#/components/parameters/OperationID' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [schema_version, operation_id], properties: { schema_version: { const: 1 }, operation_id: { type: string } } }
+      responses:
+        '204': { description: Invitation cancelled }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /internal/v1/agents/{agent_id}/revoke:
+    post:
+      tags: [Core administration (provisional)]
+      summary: Revoke an Agent credential
+      security: [{ CoreClientCertificate: [] }]
+      parameters:
+        - { name: agent_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: Credential revoked }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /internal/v1/enrollment/nodes/{node_id}/gate:
+    post:
+      tags: [Core administration (provisional)]
+      summary: Change a Node enrollment gate
+      security: [{ CoreClientCertificate: [] }]
+      parameters:
+        - { name: node_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [operation_id, status], properties: { operation_id: { type: string }, status: { type: string, enum: [OPEN, CLOSED] } } }
+            example: { operation_id: '7ee1d0a0-1ab2-4a30-82ca-84c9c8f1fb62', status: OPEN }
+      responses:
+        '200':
+          description: Gate state changed
+          content:
+            application/json:
+              schema: { type: object, required: [node_id, status, operation_id, version, bound_agent_ids], properties: { node_id: { type: string }, status: { type: string }, operation_id: { type: string }, version: { type: integer }, bound_agent_ids: { type: array, items: { type: string } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /internal/v1/nodes/{node_id}/enrollment-gate/close:
+    post:
+      tags: [Core administration (provisional)]
+      summary: Close a Node enrollment gate and return compensation details
+      security: [{ CoreClientCertificate: [] }]
+      parameters:
+        - { name: node_id, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/OperationID' }
+      responses:
+        '200':
+          description: Gate closed
+          content:
+            application/json:
+              schema: { type: object, required: [node_id, operation_id, version, previous_state], properties: { node_id: { type: string }, operation_id: { type: string }, version: { type: integer }, previous_state: { type: string }, active_binding: { oneOf: [{ $ref: '#/components/schemas/ActiveBinding' }, { type: 'null' }] } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /internal/v1/nodes/{node_id}/enrollment-gate:
+    put:
+      tags: [Core administration (provisional)]
+      summary: Complete a versioned enrollment gate transition
+      security: [{ CoreClientCertificate: [] }]
+      parameters:
+        - { name: node_id, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/OperationID' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [schema_version, operation_id, version, state], properties: { schema_version: { const: 1 }, operation_id: { type: string }, version: { type: integer, minimum: 1 }, state: { type: string, enum: [OPEN, CLOSED] } } }
+      responses:
+        '204': { description: Gate transition completed }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /internal/v1/enrollment/operations/{operation_id}:
+    get:
+      tags: [Core administration (provisional)]
+      summary: Read secret-free enrollment operation status
+      security: [{ CoreClientCertificate: [] }]
+      parameters:
+        - { name: operation_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Operation status; credential secrets are not returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnrollmentStatus' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /internal/v1/installations/{agent_id}:
+    get:
+      tags: [Core administration (provisional)]
+      summary: Read a secret-free installation record by Agent ID
+      security: [{ CoreClientCertificate: [] }]
+      parameters:
+        - { name: agent_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Installation record, content: { application/json: { schema: { $ref: '#/components/schemas/Installation' } } } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /internal/v1/nodes/{node_id}/active-installation:
+    get:
+      tags: [Core administration (provisional)]
+      summary: Read a Node's active installation
+      security: [{ CoreClientCertificate: [] }]
+      parameters:
+        - { name: node_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Active installation, content: { application/json: { schema: { $ref: '#/components/schemas/Installation' } } } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/enrollment/exchanges:
+    post:
+      tags: [Enrollment (provisional)]
+      summary: Exchange an invitation for an OpAMP credential
+      description: Possession of the invitation token and recovery proof authenticates this request. The returned credential is secret, scoped to OpAMP connection only, and returned with Cache-Control no-store. It is not a Core API or OTLP credential.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExchangeRequest' }
+            example: { enrollment_attempt_id: 'fc555a2f-b6d1-4b0e-9d14-76c5cfdc385e', agent_id: 'bfbfe8c8-2bf5-4b77-86b0-29071c9ca1e5', invitation_token: 'EXAMPLE_ONLY_NOT_A_SECRET', recovery_proof: 'EXAMPLE_ONLY_NOT_A_SECRET' }
+      responses:
+        '201':
+          description: Credential issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnrollmentCredential' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '410': { $ref: '#/components/responses/Problem' }
+  /v1/enrollment/recoveries:
+    post:
+      tags: [Enrollment (provisional)]
+      summary: Recover the prior result for a proven enrollment attempt
+      description: Possession of the enrollment attempt, Agent ID, and recovery proof is required. The credential response is secret and returned with Cache-Control no-store.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecoveryRequest' }
+            example: { enrollment_attempt_id: 'fc555a2f-b6d1-4b0e-9d14-76c5cfdc385e', agent_id: 'bfbfe8c8-2bf5-4b77-86b0-29071c9ca1e5', recovery_proof: 'EXAMPLE_ONLY_NOT_A_SECRET' }
+      responses:
+        '200':
+          description: Original enrollment credential recovered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnrollmentCredential' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '410': { $ref: '#/components/responses/Problem' }
+components:
+  securitySchemes:
+    CoreClientCertificate:
+      type: mutualTLS
+      description: TLS client certificate verified against the dedicated Core client CA; Fleet additionally checks the exact configured certificate common name.
+  parameters:
+    OperationID:
+      name: X-ARIMMS-Operation-Id
+      in: header
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 128 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 16, maxLength: 128 }
+    ActorID:
+      name: X-ARIMMS-Actor-Id
+      in: header
+      required: true
+      description: Audit attribution only; the verified Core certificate is the service identity.
+      schema: { type: string, minLength: 1, maxLength: 128 }
+    InvitationID:
+      name: invitation_id
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    Problem:
+      description: Fleet Problem response
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [alive, ready, not_ready] }
+    CreateInvitationRequest:
+      type: object
+      required: [schema_version, operation_id, node_id]
+      properties:
+        schema_version: { const: 1 }
+        operation_id: { type: string }
+        node_id: { type: string }
+        requested_ttl_seconds: { type: integer, minimum: 60, maximum: 86400 }
+    Invitation:
+      type: object
+      required: [schema_version, operation_id, invitation_id, invitation_token, node_id, status, expires_at]
+      properties:
+        schema_version: { const: 1 }
+        operation_id: { type: string }
+        invitation_id: { type: string }
+        invitation_token: { type: string }
+        node_id: { type: string }
+        status: { type: string }
+        expires_at: { type: string, format: date-time }
+    ExchangeRequest:
+      type: object
+      required: [enrollment_attempt_id, agent_id, invitation_token, recovery_proof]
+      properties:
+        enrollment_attempt_id: { type: string }
+        agent_id: { type: string }
+        invitation_token: { type: string, writeOnly: true }
+        recovery_proof: { type: string, writeOnly: true }
+    RecoveryRequest:
+      type: object
+      required: [enrollment_attempt_id, agent_id, recovery_proof]
+      properties:
+        enrollment_attempt_id: { type: string }
+        agent_id: { type: string }
+        recovery_proof: { type: string, writeOnly: true }
+    EnrollmentCredential:
+      type: object
+      required: [agent_id, node_id, credential_id, credential, credential_scope, opamp_endpoint]
+      properties:
+        agent_id: { type: string }
+        node_id: { type: string }
+        credential_id: { type: string }
+        credential: { type: string }
+        credential_scope: { const: opamp.connect }
+        opamp_endpoint: { type: string, format: uri }
+        credential_expires_at: { type: [string, 'null'], format: date-time }
+    EnrollmentStatus:
+      type: object
+      required: [schema_version, operation_id, invitation_id, node_id, status]
+      properties:
+        schema_version: { const: 1 }
+        operation_id: { type: string }
+        invitation_id: { type: string }
+        node_id: { type: string }
+        status: { type: string }
+        agent_id: { type: string }
+        credential_id: { type: string }
+    Installation:
+      type: object
+      required: [installation_id, node_id, status]
+      properties:
+        installation_id: { type: string }
+        node_id: { type: string }
+        status: { type: string }
+    ActiveBinding:
+      type: object
+      required: [installation_id, binding_id]
+      properties:
+        installation_id: { type: string }
+        binding_id: { type: string }
+    Problem:
+      type: object
+      required: [type, title, status, detail, instance, code, request_id]
+      properties:
+        type: { type: string, format: uri-reference }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string, format: uri-reference }
+        code: { type: string }
+        request_id: { type: string }
