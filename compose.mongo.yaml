@@ -1,0 +1,41 @@
+services:
+  mongodb:
+    image: mongo:8.0
+    restart: unless-stopped
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "127.0.0.1:27020:27017"
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      imms-shared:
+        aliases:
+          - mongodb
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet --eval "
+          try {
+            rs.status();
+          } catch(e) {
+            try {
+              rs.initiate({
+                _id: 'rs0',
+                members: [{_id: 0, host: 'mongodb:27017'}]
+              });
+            } catch(e2) {}
+          }
+          quit(db.hello().isWritablePrimary ? 0 : 1);
+          "
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  mongodb-data:
+
+networks:
+  imms-shared:
+    external: true
