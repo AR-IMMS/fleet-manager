@@ -54,6 +54,7 @@ func TestRouterHealthRoutes(t *testing.T) {
 					return tc.checkErr
 				}),
 				time.Second,
+				false,
 			)
 			if err != nil {
 				t.Fatalf("construct router: %v", err)
@@ -77,7 +78,7 @@ func TestRouterHealthRoutes(t *testing.T) {
 
 // TestRouterRejectsMissingReadiness prevents incomplete health wiring.
 func TestRouterRejectsMissingReadiness(t *testing.T) {
-	if _, err := newRouter(nil, time.Second); err == nil {
+	if _, err := newRouter(nil, time.Second, false); err == nil {
 		t.Fatal("expected missing readiness checker to fail")
 	}
 }
@@ -87,6 +88,7 @@ func TestRouterRejectsUnsupportedMethod(t *testing.T) {
 	router, err := newRouter(
 		readinessFunc(func(context.Context) error { return nil }),
 		time.Second,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("construct router: %v", err)
@@ -103,7 +105,7 @@ func TestRouterRejectsUnsupportedMethod(t *testing.T) {
 }
 
 func TestRouterReturnsRequestIDHeader(t *testing.T) {
-	router, err := newRouter(readinessFunc(func(context.Context) error { return nil }), time.Second)
+	router, err := newRouter(readinessFunc(func(context.Context) error { return nil }), time.Second, false)
 	if err != nil {
 		t.Fatalf("construct router: %v", err)
 	}

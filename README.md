@@ -16,7 +16,32 @@ Fleet receives authorized management requests from Core, Agent enrollment and ob
 
 ## Current implementation
 
-The code currently provides runtime configuration, an application lifecycle/composition foundation, a loopback HTTP health/readiness listener, MongoDB connectivity, a principal/authentication use case, and an OpAMP connection callback adapter. There is not yet a service entrypoint or a complete Fleet API. Durable fleet records, enrollment exchange, Core management API, session registry, configuration publication, observation ingestion, and production interoperability remain unimplemented. See the [implementation roadmap](docs/shared/integration/fleet-management/implementation-roadmap.md) for target checkpoints and decision gates.
+The code provides runtime configuration and lifecycle wiring, a health/readiness listener, MongoDB connectivity, identity verification, an OpAMP callback/server adapter, and opt-in invitation/enrollment HTTP routes. The API is still a bootstrap slice; configuration publication, observation ingestion, and full production interoperability remain incomplete. Enrollment routes are disabled by default and their cross-repository wire details remain provisional. See the [implementation roadmap](docs/shared/integration/fleet-management/implementation-roadmap.md) for target checkpoints and decision gates.
+
+## API documentation for local UAT
+
+Fleet serves an embedded OpenAPI document and Swagger UI only when
+`FLEET_API_DOCS_ENABLED=true` is set in its environment before startup:
+
+- OpenAPI document: `GET /openapi.yaml`
+- Interactive Swagger UI: `GET /docs/`
+
+For local HTTP development, set `FLEET_API_DOCS_ENABLED=true` in the Fleet
+environment before restarting. Open `http://127.0.0.1:8081/docs/` with the
+default listener, or `http://127.0.0.1:18081/docs/` with `compose.yaml` (set
+the variable in the shell or the Compose `.env` file). Do not expose the docs
+listener publicly; when Fleet is reachable beyond loopback, use configured TLS
+and restrict access through the deployment network policy. Swagger UI does
+not bypass the API's Core client-certificate checks or Agent invitation/recovery
+proof.
+
+Swagger lists the enrollment operations for reference, but Fleet only mounts
+them when `FLEET_ENROLLMENT_ENABLED=true` has also been configured with all
+required security settings; otherwise those paths are unavailable. The
+displayed schemas describe this implementation and are marked provisional;
+they are not final cross-repository contracts. Use Core's
+existing Swagger UI at `http://localhost:<core-port>/api/docs` for the
+human-authorized invitation and Core binding synchronization endpoints.
 
 ## Repository structure
 
