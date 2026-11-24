@@ -35,7 +35,7 @@ func TestMigrateAndEnsureIndexesHaveSeparateLifecycles(t *testing.T) {
 		t.Fatal("reconcile identity indexes", err)
 	}
 	assertIndexNames(t, ctx, database.Collection(collectionName), []string{
-		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1", "instance_uid_1", "node_id_1",
+		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1_scope_1", "instance_uid_1", "node_id_1",
 	})
 	assertIdentityIndexOptions(t, ctx, database.Collection(collectionName))
 	assertIndexNames(t, ctx, database.Collection(invitationsCollectionName), []string{
@@ -45,7 +45,7 @@ func TestMigrateAndEnsureIndexesHaveSeparateLifecycles(t *testing.T) {
 	assertIndexNames(t, ctx, database.Collection(attemptsCollectionName), []string{
 		"_id_", "agent_id_1", "attempt_id_1", "expires_at_1",
 	})
-	if err := database.Collection(collectionName).Indexes().DropOne(ctx, "agent_id_1"); err != nil {
+	if err := database.Collection(collectionName).Indexes().DropOne(ctx, "agent_id_1_scope_1"); err != nil {
 		t.Fatal("remove index to verify startup reconciliation", err)
 	}
 
@@ -59,7 +59,7 @@ func TestMigrateAndEnsureIndexesHaveSeparateLifecycles(t *testing.T) {
 		t.Fatal("reconcile identity indexes on subsequent startup", err)
 	}
 	assertIndexNames(t, ctx, database.Collection(collectionName), []string{
-		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1", "instance_uid_1", "node_id_1",
+		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1_scope_1", "instance_uid_1", "node_id_1",
 	})
 }
 
@@ -83,6 +83,39 @@ func TestConcurrentMigrateCallsConverge(t *testing.T) {
 		}
 	}
 	assertMigrationApplied(t, ctx, database)
+}
+
+func TestEnsureIndexesReplacesLegacyAgentUniqueness(t *testing.T) {
+	ctx, database := newMigrationTestDatabase(t)
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	collection := database.Collection(collectionName)
+	if _, err := collection.Indexes().CreateOne(ctx, driver.IndexModel{
+		Keys: bson.D{{Key: "agent_id", Value: 1}}, Options: options.Index().SetName("agent_id_1").SetUnique(true),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collection.InsertOne(ctx, bson.M{"agent_id": "legacy-agent", "credential_id": "legacy-opamp", "credential_hash": "legacy-hash", "status": "ACTIVE"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureIndexes(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	assertIndexNames(t, ctx, collection, []string{"_id_", "credential_hash_1", "credential_id_1", "agent_id_1_scope_1", "instance_uid_1", "node_id_1"})
+	var legacy record
+	if err := collection.FindOne(ctx, bson.M{"agent_id": "legacy-agent"}).Decode(&legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Scope != "opamp.connect" {
+		t.Fatalf("legacy scope = %q", legacy.Scope)
+	}
+	if _, err := collection.InsertOne(ctx, bson.M{"agent_id": "legacy-agent", "credential_id": "new-otlp", "credential_hash": "new-otlp-hash", "scope": "otlp.write", "status": "ACTIVE"}); err != nil {
+		t.Fatalf("second scoped credential rejected: %v", err)
+	}
+	if _, err := collection.InsertOne(ctx, bson.M{"agent_id": "legacy-agent", "credential_id": "duplicate-opamp", "credential_hash": "duplicate-opamp-hash", "scope": "opamp.connect", "status": "ACTIVE"}); !driver.IsDuplicateKeyError(err) {
+		t.Fatalf("duplicate OpAMP scope error=%v", err)
+	}
 }
 
 func TestEnsureIndexesFailsClosedOnConflictingIndex(t *testing.T) {

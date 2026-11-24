@@ -463,7 +463,7 @@ func (s *EnrollmentStore) Enroll(ctx context.Context, attempt domain.EnrollmentA
 		if err := s.verifier.storeCredentialForNode(txCtx, attempt.AgentID, invite.NodeID, result.CredentialID, result.Credential); err != nil {
 			return nil, err
 		}
-		if err := s.verifier.storeScopedCredentialForNode(txCtx, attempt.AgentID, invite.NodeID,
+		if err := s.verifier.storeScopedCredentialForNode(txCtx, attempt.AgentID, "",
 			result.OTLPCredential.ID, result.OTLPCredential.Token, "otlp.write"); err != nil {
 			return nil, err
 		}

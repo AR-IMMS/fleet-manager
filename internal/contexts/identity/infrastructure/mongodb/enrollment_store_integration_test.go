@@ -106,6 +106,13 @@ func TestEnrollmentCancellationAndAgentCredentialRevocation(t *testing.T) {
 	if err := store.verifier.StoreActiveCredential(ctx, "agent-revoke", "credential-revoke", "token-revoke-012345678901234567890123456789"); err != nil {
 		t.Fatal(err)
 	}
+	otlpToken := "otlp-revoke-012345678901234567890123456789"
+	if err := store.verifier.storeScopedCredentialForNode(ctx, "agent-revoke", "", "otlp-credential-revoke", otlpToken, "otlp.write"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.verifier.VerifyOTLP(ctx, otlpToken); err != nil {
+		t.Fatalf("OTLP token before revocation: %v", err)
+	}
 	if err := service.RevokeAgent(ctx, "agent-revoke"); err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +121,9 @@ func TestEnrollmentCancellationAndAgentCredentialRevocation(t *testing.T) {
 	}
 	if _, err := store.verifier.Verify(ctx, "token-revoke-012345678901234567890123456789"); !errors.Is(err, domain.ErrCredentialRejected) {
 		t.Fatalf("revoked token verify error=%v", err)
+	}
+	if _, err := store.verifier.VerifyOTLP(ctx, otlpToken); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("revoked OTLP token verify error=%v", err)
 	}
 }
 
@@ -160,6 +170,19 @@ func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
 	if first.CredentialID != replayed.CredentialID || first.Credential != replayed.Credential || first.NodeID != replayed.NodeID {
 		t.Fatal("same attempt must recover its exact original response")
 	}
+	if first.OTLPCredential == nil || replayed.OTLPCredential == nil || *first.OTLPCredential != *replayed.OTLPCredential {
+		t.Fatal("same attempt must replay its separate OTLP credential")
+	}
+	if _, err := store.verifier.VerifyOTLP(ctx, first.Credential); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("OpAMP token accepted for OTLP: %v", err)
+	}
+	identity, err := store.verifier.VerifyOTLP(ctx, first.OTLPCredential.Token)
+	if err != nil || identity.AgentID != command.AgentID || identity.Scope != "otlp.write" {
+		t.Fatalf("OTLP credential verification identity=%+v err=%v", identity, err)
+	}
+	if _, err := store.verifier.Verify(ctx, first.OTLPCredential.Token); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("OTLP token accepted for OpAMP: %v", err)
+	}
 
 	// A newly constructed adapter simulates process restart and must recover
 	// the same result from encrypted durable state.
@@ -175,6 +198,9 @@ func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
 	}
 	if recovered.Credential != first.Credential || recovered.CredentialID != first.CredentialID {
 		t.Fatal("recovery after restart must return the original credential")
+	}
+	if recovered.OTLPCredential == nil || *recovered.OTLPCredential != *first.OTLPCredential {
+		t.Fatal("recovery after restart must return the original OTLP credential")
 	}
 	status, err := service.GetStatus(ctx, invitation.OperationID)
 	if err != nil {
@@ -210,6 +236,9 @@ func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
 	}
 	if strings.Contains(string(mustBSON(t, persistedAttempt)), first.Credential) {
 		t.Fatal("raw Fleet credential must not appear in its Mongo record")
+	}
+	if strings.Contains(string(mustBSON(t, persistedAttempt)), first.OTLPCredential.Token) {
+		t.Fatal("raw OTLP credential must not appear in its Mongo record")
 	}
 	secondInvitation, err := service.CreateInvitation(ctx, application.CreateInvitationCommand{
 		OperationID: "operation-second-agent", CorePrincipalID: "core-service", IdempotencyKey: "idempotency-second-agent",
