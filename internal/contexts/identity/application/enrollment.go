@@ -153,6 +153,14 @@ func (s EnrollmentService) Exchange(
 	if err != nil {
 		return domain.EnrollmentResult{}, fmt.Errorf("generate enrollment credential: %w", err)
 	}
+	otlpCredentialID, err := randomSecret(s.entropy(), 18)
+	if err != nil {
+		return domain.EnrollmentResult{}, fmt.Errorf("generate OTLP credential ID: %w", err)
+	}
+	otlpCredential, err := randomSecret(s.entropy(), 32)
+	if err != nil {
+		return domain.EnrollmentResult{}, fmt.Errorf("generate OTLP credential: %w", err)
+	}
 	attempt := domain.EnrollmentAttempt{
 		AttemptID:           command.AttemptID,
 		AgentID:             command.AgentID,
@@ -160,10 +168,11 @@ func (s EnrollmentService) Exchange(
 		RecoveryProofHash:   digest(command.RecoveryProof),
 		RecoveryUntil:       s.now().Add(s.RecoveryTTL),
 		Result: domain.EnrollmentResult{
-			AgentID:       command.AgentID,
-			CredentialID:  credentialID,
-			Credential:    credential,
-			OpAMPEndpoint: s.OpAMPEndpoint,
+			AgentID:        command.AgentID,
+			CredentialID:   credentialID,
+			Credential:     credential,
+			OpAMPEndpoint:  s.OpAMPEndpoint,
+			OTLPCredential: &domain.OTLPCredential{ID: otlpCredentialID, Token: otlpCredential, Scope: "otlp.write"},
 		},
 	}
 	return s.Store.Enroll(ctx, attempt)
