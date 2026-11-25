@@ -29,6 +29,19 @@ are resolved.
    exchange to fail closed.
 6. The existing OpAMP verifier authenticates the Fleet credential and binds
    the Supervisor `instance_uid` to the separately owned `agent_id`.
+7. After enrollment, the Collector sends TLS OTLP/HTTP JSON through the Agent
+   ingress. Fleet introspects that separate `otlp.write` bearer on each request
+   using the ingress's dedicated mTLS certificate identity. The credential
+   expires after 90 days. The response maps
+   the credential to `agent_id` without returning the secret; Fleet outage or
+   invalid/revoked credentials fail closed.
+
+The private `POST /internal/v1/otlp/credentials/introspect` route is enabled only
+when `FLEET_OTLP_INGRESS_CLIENT_CN` is configured to a distinct CN from Core.
+Fleet stores the bearer digest, scope, and status in Mongo and revokes OTLP and
+OpAMP records together. Positive introspection results are not cached by the
+ingress, so a committed revoke denies the next request; an already authorized
+request may finish within the ingress deadline.
 
 ## Class diagram
 

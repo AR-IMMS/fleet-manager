@@ -90,13 +90,17 @@ func TestCreateInvitationRejectsLifetimeBelowContractMinimum(t *testing.T) {
 }
 
 func TestExchangeReplayAndRecoveryReturnSameCredential(t *testing.T) {
+	entropy := make([]byte, 512)
+	for i := range entropy {
+		entropy[i] = byte(i)
+	}
 	store := &memoryEnrollmentStore{
 		invitations: make(map[string]domain.EnrollmentInvitation),
 		attempts:    make(map[string]domain.EnrollmentAttempt),
 	}
 	service := EnrollmentService{
 		Store:            store,
-		Entropy:          bytes.NewReader(bytes.Repeat([]byte{0x17}, 512)),
+		Entropy:          bytes.NewReader(entropy),
 		Now:              time.Now,
 		DefaultInviteTTL: 10 * time.Minute,
 		MaximumInviteTTL: time.Hour,
@@ -131,6 +135,25 @@ func TestExchangeReplayAndRecoveryReturnSameCredential(t *testing.T) {
 	if recovered.CredentialID != first.CredentialID || recovered.Credential != first.Credential {
 		t.Fatal("recovery proof must return the original credential")
 	}
+	if first.OTLPCredential == nil || first.OTLPCredential.ID == "" || first.OTLPCredential.Token == "" || first.OTLPCredential.Scope != "otlp.write" || first.OTLPCredential.ExpiresAt == nil || !first.OTLPCredential.ExpiresAt.After(time.Now()) {
+		t.Fatal("exchange must issue an OTLP write credential")
+	}
+	if first.OTLPCredential.ID == first.CredentialID {
+		t.Fatal("OTLP and OpAMP credential IDs must differ")
+	}
+	if !sameOTLPCredential(second.OTLPCredential, first.OTLPCredential) || !sameOTLPCredential(recovered.OTLPCredential, first.OTLPCredential) {
+		t.Fatal("replay and recovery must return the original OTLP credential")
+	}
+}
+
+func sameOTLPCredential(left, right *domain.OTLPCredential) bool {
+	if left == nil || right == nil || left.ID != right.ID || left.Token != right.Token || left.Scope != right.Scope {
+		return false
+	}
+	if left.ExpiresAt == nil || right.ExpiresAt == nil {
+		return left.ExpiresAt == nil && right.ExpiresAt == nil
+	}
+	return left.ExpiresAt.UnixMilli() == right.ExpiresAt.UnixMilli()
 }
 
 func TestExchangeRejectsDifferentRecoveryProofForExistingAttempt(t *testing.T) {

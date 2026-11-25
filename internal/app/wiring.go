@@ -86,6 +86,11 @@ func wireRuntime(
 		if handlerErr != nil {
 			return runtime, fmt.Errorf("initialize enrollment HTTP adapter: %w", handlerErr)
 		}
+		if cfg.Enrollment.OTLPIngressClientCN != "" {
+			if err := enrollmentHandler.SetOTLPVerifier(runtime.identityStore, cfg.Enrollment.OTLPIngressClientCN); err != nil {
+				return runtime, fmt.Errorf("initialize OTLP introspection adapter: %w", err)
+			}
+		}
 		enrollmentHandlers = append(enrollmentHandlers, enrollmentHandler)
 	}
 

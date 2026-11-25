@@ -71,6 +71,14 @@ type EnrollmentAttempt struct {
 	Result              EnrollmentResult
 }
 
+// OTLPCredential is issued separately for authenticated telemetry ingestion.
+type OTLPCredential struct {
+	ID        string
+	Token     string
+	Scope     string
+	ExpiresAt *time.Time
+}
+
 // EnrollmentResult contains the one-time Fleet credential response.
 type EnrollmentResult struct {
 	AgentID             string
@@ -79,6 +87,7 @@ type EnrollmentResult struct {
 	Credential          string
 	OpAMPEndpoint       string
 	CredentialExpiresAt *time.Time
+	OTLPCredential      *OTLPCredential
 }
 
 // EnrollmentStatus is a secret-free enrollment summary for Core reconciliation.

@@ -20,8 +20,10 @@ const maxEnrollmentRequestBytes = 32 << 10
 // EnrollmentHandler adapts provisional HTTP requests to identity use cases.
 // Routes are mounted only when enrollment is explicitly enabled.
 type EnrollmentHandler struct {
-	service *application.EnrollmentService
-	coreCN  string
+	service      *application.EnrollmentService
+	coreCN       string
+	otlpVerifier application.OTLPVerifier
+	otlpClientCN string
 }
 
 // NewEnrollmentHandler constructs the HTTP adapter with a trusted Core mTLS identity.
@@ -34,6 +36,9 @@ func NewEnrollmentHandler(service *application.EnrollmentService, coreClientCN s
 
 // Mount registers provisional invitation and Agent exchange routes.
 func (h *EnrollmentHandler) Mount(router chi.Router) {
+	if h.otlpVerifier != nil {
+		router.Post("/internal/v1/otlp/credentials/introspect", h.introspectOTLP)
+	}
 	router.Post("/internal/v1/enrollment/invitations", h.createInvitation)
 	router.Post("/internal/v1/enrollment/invitations/{invitation_id}/cancel", h.cancelInvitation)
 	router.Post("/internal/v1/agents/{agent_id}/revoke", h.revokeAgent)
@@ -77,13 +82,36 @@ type exchangeRequest struct {
 }
 
 type exchangeResponse struct {
-	AgentID             string     `json:"agent_id"`
-	NodeID              string     `json:"node_id"`
-	CredentialID        string     `json:"credential_id"`
-	Credential          string     `json:"credential"`
-	CredentialScope     string     `json:"credential_scope"`
-	OpAMPEndpoint       string     `json:"opamp_endpoint"`
-	CredentialExpiresAt *time.Time `json:"credential_expires_at"`
+	AgentID             string                  `json:"agent_id"`
+	NodeID              string                  `json:"node_id"`
+	CredentialID        string                  `json:"credential_id"`
+	Credential          string                  `json:"credential"`
+	CredentialScope     string                  `json:"credential_scope"`
+	OpAMPEndpoint       string                  `json:"opamp_endpoint"`
+	CredentialExpiresAt *time.Time              `json:"credential_expires_at"`
+	OTLPCredential      *otlpCredentialResponse `json:"otlp_credential,omitempty"`
+}
+
+type otlpCredentialResponse struct {
+	ID        string     `json:"credential_id"`
+	Token     string     `json:"credential"`
+	Scope     string     `json:"credential_scope"`
+	ExpiresAt *time.Time `json:"credential_expires_at"`
+}
+
+func enrollmentExchangeResponse(result domain.EnrollmentResult) exchangeResponse {
+	response := exchangeResponse{
+		AgentID: result.AgentID, NodeID: result.NodeID, CredentialID: result.CredentialID,
+		Credential: result.Credential, CredentialScope: "opamp.connect", OpAMPEndpoint: result.OpAMPEndpoint,
+		CredentialExpiresAt: result.CredentialExpiresAt,
+	}
+	if result.OTLPCredential != nil {
+		response.OTLPCredential = &otlpCredentialResponse{
+			ID: result.OTLPCredential.ID, Token: result.OTLPCredential.Token,
+			Scope: result.OTLPCredential.Scope, ExpiresAt: result.OTLPCredential.ExpiresAt,
+		}
+	}
+	return response
 }
 
 type recoveryRequest struct {
@@ -234,11 +262,7 @@ func (h *EnrollmentHandler) exchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeEnrollmentJSON(w, r, http.StatusCreated, exchangeResponse{
-		AgentID: result.AgentID, NodeID: result.NodeID, CredentialID: result.CredentialID,
-		Credential: result.Credential, CredentialScope: "opamp.connect", OpAMPEndpoint: result.OpAMPEndpoint,
-		CredentialExpiresAt: result.CredentialExpiresAt,
-	})
+	writeEnrollmentJSON(w, r, http.StatusCreated, enrollmentExchangeResponse(result))
 }
 
 func (h *EnrollmentHandler) changeGate(w http.ResponseWriter, r *http.Request) {
@@ -364,11 +388,7 @@ func (h *EnrollmentHandler) recover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeEnrollmentJSON(w, r, http.StatusOK, exchangeResponse{
-		AgentID: result.AgentID, NodeID: result.NodeID, CredentialID: result.CredentialID,
-		Credential: result.Credential, CredentialScope: "opamp.connect", OpAMPEndpoint: result.OpAMPEndpoint,
-		CredentialExpiresAt: result.CredentialExpiresAt,
-	})
+	writeEnrollmentJSON(w, r, http.StatusOK, enrollmentExchangeResponse(result))
 }
 
 func (h *EnrollmentHandler) coreActor(r *http.Request) (string, bool) {

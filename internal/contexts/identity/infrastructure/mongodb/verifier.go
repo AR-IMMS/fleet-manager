@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -19,18 +20,21 @@ var errRecordNotFound = errors.New("identity record not found")
 var errInvalidCredentialRecord = errors.New("identity credential record is invalid")
 
 type record struct {
-	AgentID        string `bson:"agent_id"`
-	NodeID         string `bson:"node_id,omitempty"`
-	CredentialID   string `bson:"credential_id"`
-	CredentialHash string `bson:"credential_hash"`
-	Status         string `bson:"status"`
-	InstanceUID    string `bson:"instance_uid,omitempty"`
+	AgentID        string     `bson:"agent_id"`
+	NodeID         string     `bson:"node_id,omitempty"`
+	CredentialID   string     `bson:"credential_id"`
+	CredentialHash string     `bson:"credential_hash"`
+	Scope          string     `bson:"scope,omitempty"`
+	ExpiresAt      *time.Time `bson:"expires_at,omitempty"`
+	Status         string     `bson:"status"`
+	InstanceUID    string     `bson:"instance_uid,omitempty"`
 }
 
 // Verifier checks Fleet-issued bearer credentials and atomically owns Supervisor
 // instance UID binding. One Mongo document is the concurrency boundary for both.
 type Verifier struct {
 	collection *mongo.Collection
+	client     *mongo.Client
 }
 
 // StoreActiveCredential persists an enrollment-issued token digest and its
@@ -54,13 +58,29 @@ func (v *Verifier) storeCredentialForNode(
 	ctx context.Context,
 	agentID, nodeID, credentialID, credential string,
 ) error {
+	return v.storeScopedCredentialForNode(ctx, agentID, nodeID, credentialID, credential, "opamp.connect")
+}
+
+func (v *Verifier) storeScopedCredentialForNode(
+	ctx context.Context,
+	agentID, nodeID, credentialID, credential, scope string,
+) error {
+	return v.storeScopedCredentialForNodeWithExpiry(ctx, agentID, nodeID, credentialID, credential, scope, nil)
+}
+
+func (v *Verifier) storeScopedCredentialForNodeWithExpiry(
+	ctx context.Context,
+	agentID, nodeID, credentialID, credential, scope string,
+	expiresAt *time.Time,
+) error {
 	principal, err := domain.NewPrincipal(agentID, credentialID)
-	if err != nil || credential == "" || len(credential) < 32 || (nodeID != "" && nodeID != strings.TrimSpace(nodeID)) {
+	if err != nil || credential == "" || len(credential) < 32 || (nodeID != "" && nodeID != strings.TrimSpace(nodeID)) ||
+		(scope != "opamp.connect" && scope != "otlp.write") {
 		return errInvalidCredentialRecord
 	}
 	_, err = v.collection.InsertOne(ctx, record{
 		AgentID: principal.InstallationID(), NodeID: nodeID, CredentialID: principal.CredentialID(),
-		CredentialHash: digest(credential), Status: "ACTIVE",
+		CredentialHash: digest(credential), Scope: scope, ExpiresAt: expiresAt, Status: "ACTIVE",
 	})
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
@@ -77,7 +97,7 @@ func NewVerifier(database *mongo.Database) (*Verifier, error) {
 	if database == nil {
 		return nil, fmt.Errorf("identity database is required")
 	}
-	return &Verifier{collection: database.Collection(collectionName)}, nil
+	return &Verifier{collection: database.Collection(collectionName), client: database.Client()}, nil
 }
 
 // Verify resolves an active high-entropy credential without retaining or logging it.
@@ -89,6 +109,7 @@ func (v *Verifier) Verify(ctx context.Context, credential string) (domain.Princi
 	err := v.collection.FindOne(ctx, bson.M{
 		"credential_hash": digest(credential),
 		"status":          "ACTIVE",
+		"$or":             opampScopeFilter(),
 	}).Decode(&found)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return domain.Principal{}, domain.ErrCredentialRejected
@@ -101,6 +122,35 @@ func (v *Verifier) Verify(ctx context.Context, credential string) (domain.Princi
 		return domain.Principal{}, domain.ErrIdentityUnavailable
 	}
 	return principal, nil
+}
+
+func opampScopeFilter() bson.A {
+	return bson.A{bson.M{"scope": "opamp.connect"}, bson.M{"scope": bson.M{"$exists": false}}}
+}
+
+// VerifyOTLP accepts only an active otlp.write credential. It does not use
+// the OpAMP UID binding and never returns the bearer or its digest.
+func (v *Verifier) VerifyOTLP(ctx context.Context, credential string) (domain.OTLPIdentity, error) {
+	if len(credential) < 32 || len(credential) > 256 {
+		return domain.OTLPIdentity{}, domain.ErrCredentialRejected
+	}
+	var found record
+	err := v.collection.FindOne(ctx, bson.M{
+		"credential_hash": digest(credential), "scope": "otlp.write", "status": "ACTIVE",
+	}).Decode(&found)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return domain.OTLPIdentity{}, domain.ErrCredentialRejected
+	}
+	if err != nil {
+		return domain.OTLPIdentity{}, domain.ErrIdentityUnavailable
+	}
+	if found.ExpiresAt != nil && !found.ExpiresAt.After(time.Now()) {
+		return domain.OTLPIdentity{}, domain.ErrCredentialRejected
+	}
+	if _, err := domain.NewPrincipal(found.AgentID, found.CredentialID); err != nil {
+		return domain.OTLPIdentity{}, domain.ErrIdentityUnavailable
+	}
+	return domain.OTLPIdentity{AgentID: found.AgentID, CredentialID: found.CredentialID, Scope: found.Scope, ExpiresAt: found.ExpiresAt}, nil
 }
 
 // BindAndAuthorize uses a conditional single-document update: the first UID is
@@ -116,7 +166,7 @@ func (v *Verifier) BindAndAuthorize(
 	uidText := hex.EncodeToString(uid)
 	filter := bson.M{
 		"agent_id": principal.InstallationID(), "credential_id": principal.CredentialID(),
-		"status": "ACTIVE", "$or": bson.A{
+		"status": "ACTIVE", "scope": bson.M{"$ne": "otlp.write"}, "$or": bson.A{
 			bson.M{"instance_uid": bson.M{"$exists": false}},
 			bson.M{"instance_uid": uidText},
 		},
@@ -167,24 +217,42 @@ func (v *Verifier) Revoke(ctx context.Context, credentialID string) error {
 	return nil
 }
 
-// RevokeAgent atomically fences every active credential for an installation.
+// RevokeAgent commits the OpAMP and OTLP credential fences together.
 func (v *Verifier) RevokeAgent(ctx context.Context, agentID string) error {
 	if strings.TrimSpace(agentID) == "" || strings.TrimSpace(agentID) != agentID {
 		return domain.ErrEnrollmentConflict
 	}
-	result, err := v.collection.UpdateMany(ctx, bson.M{"agent_id": agentID, "status": "ACTIVE"}, bson.M{"$set": bson.M{"status": "REVOKED"}})
+	if v.client == nil {
+		return domain.ErrIdentityUnavailable
+	}
+	session, err := v.client.StartSession()
 	if err != nil {
 		return domain.ErrIdentityUnavailable
 	}
-	if result.MatchedCount > 0 {
-		return nil
+	defer session.EndSession(ctx)
+	_, err = session.WithTransaction(ctx, func(txCtx context.Context) (any, error) {
+		result, updateErr := v.collection.UpdateMany(txCtx,
+			bson.M{"agent_id": agentID, "status": "ACTIVE"}, bson.M{"$set": bson.M{"status": "REVOKED"}})
+		if updateErr != nil {
+			return nil, updateErr
+		}
+		if result.MatchedCount > 0 {
+			return nil, nil
+		}
+		count, countErr := v.collection.CountDocuments(txCtx, bson.M{"agent_id": agentID})
+		if countErr != nil {
+			return nil, countErr
+		}
+		if count == 0 {
+			return nil, domain.ErrEnrollmentNotFound
+		}
+		return nil, nil
+	})
+	if errors.Is(err, domain.ErrEnrollmentNotFound) {
+		return err
 	}
-	count, err := v.collection.CountDocuments(ctx, bson.M{"agent_id": agentID})
 	if err != nil {
 		return domain.ErrIdentityUnavailable
-	}
-	if count == 0 {
-		return domain.ErrEnrollmentNotFound
 	}
 	return nil
 }

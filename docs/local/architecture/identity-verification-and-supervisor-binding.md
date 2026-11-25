@@ -69,7 +69,7 @@ direction TB
     IdentityVerifier --> Principal : returns verified agent and credential IDs
 ```
 
-The credential token is hashed with SHA-256 before storage. This implementation assumes a high-entropy token of at least 32 bytes; the enrollment flow must generate it randomly and return it only to its authorized recipient. Raw tokens are not written to MongoDB or logs. Startup reconciles unique indexes for credential hash, credential ID, `agent_id`, and string-valued Supervisor UID. Expiration is not represented or checked yet: an active record remains valid until explicitly revoked. This is a deliberate limit while C01 expiry/rotation rules are OPEN and a reason production deployments should leave the default-disabled listener off.
+Credential tokens are hashed with SHA-256 before storage and use at least 32 random bytes. Raw tokens are not written to MongoDB or logs. Startup reconciles unique indexes for credential hash, credential ID, Agent plus scope, and string-valued Supervisor UID. OpAMP expiry remains unset. OTLP credentials carry a 90-day expiry stored with the digest and checked on every introspection; revoked or expired tokens are rejected.
 
 ### Binding and reconnect behavior
 

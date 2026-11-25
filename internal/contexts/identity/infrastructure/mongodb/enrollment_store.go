@@ -382,7 +382,10 @@ func (s *EnrollmentStore) CancelInvitation(ctx context.Context, invitationID, op
 // Enroll atomically consumes a valid invitation, creates an identity credential,
 // and stores an encrypted result for retry or recovery.
 func (s *EnrollmentStore) Enroll(ctx context.Context, attempt domain.EnrollmentAttempt) (domain.EnrollmentResult, error) {
-	if attempt.AttemptID == "" || attempt.AgentID == "" || attempt.Result.CredentialID == "" || attempt.Result.Credential == "" || !attempt.RecoveryUntil.After(s.clock()) {
+	if attempt.AttemptID == "" || attempt.AgentID == "" || attempt.Result.CredentialID == "" || attempt.Result.Credential == "" ||
+		attempt.Result.OTLPCredential == nil || attempt.Result.OTLPCredential.ID == "" || len(attempt.Result.OTLPCredential.Token) < 32 ||
+		attempt.Result.OTLPCredential.Scope != "otlp.write" || attempt.Result.OTLPCredential.ID == attempt.Result.CredentialID ||
+		attempt.Result.OTLPCredential.Token == attempt.Result.Credential || !attempt.RecoveryUntil.After(s.clock()) {
 		return domain.EnrollmentResult{}, domain.ErrInvitationRejected
 	}
 	result := attempt.Result
@@ -458,6 +461,10 @@ func (s *EnrollmentStore) Enroll(ctx context.Context, attempt domain.EnrollmentA
 		}
 		result.NodeID = invite.NodeID
 		if err := s.verifier.storeCredentialForNode(txCtx, attempt.AgentID, invite.NodeID, result.CredentialID, result.Credential); err != nil {
+			return nil, err
+		}
+		if err := s.verifier.storeScopedCredentialForNodeWithExpiry(txCtx, attempt.AgentID, "",
+			result.OTLPCredential.ID, result.OTLPCredential.Token, "otlp.write", result.OTLPCredential.ExpiresAt); err != nil {
 			return nil, err
 		}
 		serialized, marshalErr := bson.Marshal(result)

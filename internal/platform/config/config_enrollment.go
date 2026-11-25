@@ -14,13 +14,14 @@ import (
 // EnrollmentConfig controls the provisional Core and Agent enrollment routes.
 // The feature is disabled unless explicitly enabled by deployment config.
 type EnrollmentConfig struct {
-	Enabled          bool          `json:"enabled" yaml:"enabled"`
-	EncryptionKey    []byte        `json:"-" yaml:"-"`
-	DefaultInviteTTL time.Duration `json:"default_invitation_ttl" yaml:"default_invitation_ttl"`
-	MaximumInviteTTL time.Duration `json:"maximum_invitation_ttl" yaml:"maximum_invitation_ttl"`
-	RecoveryTTL      time.Duration `json:"recovery_ttl" yaml:"recovery_ttl"`
-	OpAMPEndpoint    string        `json:"opamp_endpoint" yaml:"opamp_endpoint"`
-	CoreClientCN     string        `json:"core_client_cn" yaml:"core_client_cn"`
+	Enabled             bool          `json:"enabled" yaml:"enabled"`
+	EncryptionKey       []byte        `json:"-" yaml:"-"`
+	DefaultInviteTTL    time.Duration `json:"default_invitation_ttl" yaml:"default_invitation_ttl"`
+	MaximumInviteTTL    time.Duration `json:"maximum_invitation_ttl" yaml:"maximum_invitation_ttl"`
+	RecoveryTTL         time.Duration `json:"recovery_ttl" yaml:"recovery_ttl"`
+	OpAMPEndpoint       string        `json:"opamp_endpoint" yaml:"opamp_endpoint"`
+	CoreClientCN        string        `json:"core_client_cn" yaml:"core_client_cn"`
+	OTLPIngressClientCN string        `json:"otlp_ingress_client_cn" yaml:"otlp_ingress_client_cn"`
 }
 
 func loadEnrollmentConfig(reader env.Reader) (EnrollmentConfig, error) {
@@ -47,6 +48,7 @@ func loadEnrollmentConfig(reader env.Reader) (EnrollmentConfig, error) {
 	}
 	cfg.OpAMPEndpoint = reader.Optional("FLEET_ENROLLMENT_OPAMP_ENDPOINT")
 	cfg.CoreClientCN = reader.Optional("FLEET_ENROLLMENT_CORE_CLIENT_CN")
+	cfg.OTLPIngressClientCN = reader.Optional("FLEET_OTLP_INGRESS_CLIENT_CN")
 	encodedKey := reader.Optional("FLEET_ENROLLMENT_ENCRYPTION_KEY")
 	if encodedKey != "" {
 		cfg.EncryptionKey, err = base64.RawStdEncoding.DecodeString(encodedKey)
@@ -76,6 +78,9 @@ func (c EnrollmentConfig) Validate() error {
 	}
 	if strings.TrimSpace(c.CoreClientCN) == "" || strings.TrimSpace(c.CoreClientCN) != c.CoreClientCN {
 		return fmt.Errorf("enrollment requires an exact Core client certificate common name")
+	}
+	if c.OTLPIngressClientCN != "" && (strings.TrimSpace(c.OTLPIngressClientCN) != c.OTLPIngressClientCN || c.OTLPIngressClientCN == c.CoreClientCN) {
+		return fmt.Errorf("OTLP ingress client certificate identity must be distinct from Core")
 	}
 	endpoint, err := url.Parse(c.OpAMPEndpoint)
 	if err != nil || endpoint.Scheme != "wss" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {

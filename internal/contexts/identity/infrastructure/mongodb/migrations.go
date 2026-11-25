@@ -50,11 +50,48 @@ func EnsureIndexes(ctx context.Context, database *mongo.Database) error {
 	if database == nil {
 		return errors.New("identity index database is required")
 	}
-	_, err := database.Collection(collectionName).Indexes().CreateMany(ctx, identityIndexes())
+	collection := database.Collection(collectionName)
+	// Legacy records have no scope. Set it before replacing the agent-wide
+	// uniqueness constraint with one credential per Agent and scope.
+	if _, err := collection.UpdateMany(ctx, bson.M{"scope": bson.M{"$exists": false}}, bson.M{"$set": bson.M{"scope": "opamp.connect"}}); err != nil {
+		return errors.New("identity credential scope migration unavailable")
+	}
+	_, err := collection.Indexes().CreateMany(ctx, identityIndexes())
 	if err != nil {
 		return errors.New("identity verifier indexes unavailable")
 	}
+	if err := dropLegacyAgentIndex(ctx, collection); err != nil {
+		return err
+	}
 	return EnsureEnrollmentIndexes(ctx, database)
+}
+
+func dropLegacyAgentIndex(ctx context.Context, collection *mongo.Collection) error {
+	cursor, err := collection.Indexes().List(ctx)
+	if err != nil {
+		return errors.New("identity index inventory unavailable")
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	var indexes []struct {
+		Name string `bson:"name"`
+	}
+	if err := cursor.All(ctx, &indexes); err != nil {
+		return errors.New("identity index inventory unavailable")
+	}
+	for _, index := range indexes {
+		if index.Name != "agent_id_1" {
+			continue
+		}
+		if err := collection.Indexes().DropOne(ctx, index.Name); err != nil {
+			// Concurrent startup may have removed it after the inventory read.
+			var commandErr mongo.CommandError
+			if !errors.As(err, &commandErr) || commandErr.Code != 27 {
+				return errors.New("legacy agent index removal unavailable")
+			}
+		}
+		break
+	}
+	return nil
 }
 
 func applyMigration(ctx context.Context, database *mongo.Database, migrationID, checksum string, collectionNames []string) error {
@@ -150,7 +187,7 @@ func identityIndexes() []mongo.IndexModel {
 	return []mongo.IndexModel{
 		{Keys: bson.D{{Key: "credential_hash", Value: 1}}, Options: options.Index().SetName("credential_hash_1").SetUnique(true)},
 		{Keys: bson.D{{Key: "credential_id", Value: 1}}, Options: options.Index().SetName("credential_id_1").SetUnique(true)},
-		{Keys: bson.D{{Key: "agent_id", Value: 1}}, Options: options.Index().SetName("agent_id_1").SetUnique(true)},
+		{Keys: bson.D{{Key: "agent_id", Value: 1}, {Key: "scope", Value: 1}}, Options: options.Index().SetName("agent_id_1_scope_1").SetUnique(true)},
 		{Keys: bson.D{{Key: "node_id", Value: 1}}, Options: options.Index().SetName("node_id_1").SetUnique(true).SetPartialFilterExpression(bson.M{"node_id": bson.M{"$type": "string"}})},
 		{Keys: bson.D{{Key: "instance_uid", Value: 1}}, Options: options.Index().SetName("instance_uid_1").SetUnique(true).SetPartialFilterExpression(bson.M{"instance_uid": bson.M{"$type": "string"}})},
 	}
