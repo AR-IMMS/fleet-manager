@@ -78,26 +78,30 @@ The official [OpAMP specification](https://opentelemetry.io/docs/specs/opamp/) g
 
 ## Local Docker Compose
 
-The development Compose stack builds a non-root Fleet image and starts a
-separate MongoDB replica set. It is for local development only: MongoDB has no
-authentication, and the current Fleet HTTP listener is health-only. OpAMP
-remains disabled.
-
-Fleet deliberately validates that its plaintext HTTP listener binds to an
-explicit loopback address. The Compose service uses host networking to retain
-that boundary and is reachable at `http://127.0.0.1:18081`. On Docker Desktop
-4.34 or later, enable **Settings → Resources → Network → Enable host
-networking**. Linux Docker Engine supports host networking without that setting.
-This service uses host port `27020` for its local MongoDB replica set so it can
-run beside the existing Core MongoDB stack. Change
-`FLEET_MONGODB_HOST_PORT` if that port is occupied.
+The base Compose service uses HTTPS on `127.0.0.1:18081` with the local
+certificate in `certs/fleet-server.crt`. It joins the external `imms-shared`
+network and uses the existing `mongodb` service; start Core's MongoDB service
+before Fleet. The base configuration serves health endpoints only and leaves
+Agent enrollment and OpAMP disabled.
 
 ```bash
-docker compose up --build --wait
+docker compose up --build -d fleet-manager
 docker compose ps
 ```
 
-Check Fleet readiness at `http://127.0.0.1:18081/health/ready`. Follow logs
-with `docker compose logs -f fleet-manager`. Stop the stack with
-`docker compose down`; the named MongoDB volume remains. `docker compose down
--v` deletes the Fleet development database volume.
+Check readiness at `https://127.0.0.1:18081/health/ready` (the local server
+certificate is self-signed). Follow logs with `docker compose logs -f
+fleet-manager`.
+
+For the local Core integration, first generate Core's local mTLS files using
+the instructions in Core's README and set a private base64-encoded 32-byte
+`FLEET_ENROLLMENT_ENCRYPTION_KEY` in this repository's ignored `.env.local`.
+Then enable invitation routes and the TLS OpAMP listener with the integration
+overlay:
+
+```bash
+docker compose -f compose.yaml -f compose.core-integration.yaml up --build -d fleet-manager
+```
+
+The integration overlay trusts Core's client CA and publishes OpAMP at
+`127.0.0.1:18082`. Stop this service with `docker compose down`.

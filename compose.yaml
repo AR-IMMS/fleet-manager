@@ -3,23 +3,42 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+
     restart: unless-stopped
     init: true
     stop_grace_period: 15s
 
+    env_file:
+      - .env
+
     networks:
       - imms-shared
 
-    environment:
-      FLEET_HTTP_LISTEN_ADDRESS: 0.0.0.0:18081
-      FLEET_API_DOCS_ENABLED: ${FLEET_API_DOCS_ENABLED:-false}
-      FLEET_MONGODB_URI: mongodb://mongodb:27017/?directConnection=true
-      FLEET_MONGODB_DATABASE: ar_imms_fleet
-      FLEET_LOG_FORMAT: json
-      OPAMP_ENABLED: "false"
+    volumes:
+      - type: bind
+        source: ./certs/fleet-server.crt
+        target: /run/fleet/tls/server.crt
+        read_only: true
+        bind:
+          create_host_path: false
+
+      - type: bind
+        source: ./certs/fleet-server.key
+        target: /run/fleet/tls/server.key
+        read_only: true
+        bind:
+          create_host_path: false
+
+      - type: bind
+        source: ./certs/core-client-ca.crt
+        target: /run/fleet/tls/core-client-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
 
     ports:
       - "127.0.0.1:18081:18081"
+      - "127.0.0.1:14320:4320"
 
 networks:
   imms-shared:
