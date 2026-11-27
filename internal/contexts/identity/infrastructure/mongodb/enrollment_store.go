@@ -131,6 +131,9 @@ func EnsureEnrollmentIndexes(ctx context.Context, database *mongo.Database) erro
 	if database == nil {
 		return fmt.Errorf("enrollment index database is required")
 	}
+	if err := dropNamedIndex(ctx, database.Collection(attemptsCollectionName), "agent_id_1"); err != nil {
+		return fmt.Errorf("remove legacy enrollment Agent uniqueness index: %w", err)
+	}
 	_, err := database.Collection(invitationsCollectionName).Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "operation_id", Value: 1}}, Options: options.Index().SetName("operation_id_1").SetUnique(true)},
 		{Keys: bson.D{{Key: "core_principal_id", Value: 1}, {Key: "idempotency_hash", Value: 1}}, Options: options.Index().SetName("core_principal_id_1_idempotency_hash_1").SetUnique(true).SetPartialFilterExpression(bson.M{"core_principal_id": bson.M{"$type": "string"}})},
@@ -142,7 +145,7 @@ func EnsureEnrollmentIndexes(ctx context.Context, database *mongo.Database) erro
 	}
 	_, err = database.Collection(attemptsCollectionName).Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "attempt_id", Value: 1}}, Options: options.Index().SetName("attempt_id_1").SetUnique(true)},
-		{Keys: bson.D{{Key: "agent_id", Value: 1}}, Options: options.Index().SetName("agent_id_1").SetUnique(true)},
+		{Keys: bson.D{{Key: "agent_id", Value: 1}}, Options: options.Index().SetName("agent_id_history_1")},
 		{Keys: bson.D{{Key: "expires_at", Value: 1}}, Options: options.Index().SetName("expires_at_1").SetExpireAfterSeconds(0)},
 	})
 	if err != nil {

@@ -35,7 +35,7 @@ func TestMigrateAndEnsureIndexesHaveSeparateLifecycles(t *testing.T) {
 		t.Fatal("reconcile identity indexes", err)
 	}
 	assertIndexNames(t, ctx, database.Collection(collectionName), []string{
-		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1_scope_1", "instance_uid_1", "node_id_1",
+		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1_scope_active_1", "instance_uid_active_1", "node_id_active_1",
 	})
 	assertIdentityIndexOptions(t, ctx, database.Collection(collectionName))
 	assertIndexNames(t, ctx, database.Collection(invitationsCollectionName), []string{
@@ -43,9 +43,9 @@ func TestMigrateAndEnsureIndexesHaveSeparateLifecycles(t *testing.T) {
 	})
 	assertIndexNames(t, ctx, database.Collection(invitationEscrowName), []string{"_id_", "expires_at_1"})
 	assertIndexNames(t, ctx, database.Collection(attemptsCollectionName), []string{
-		"_id_", "agent_id_1", "attempt_id_1", "expires_at_1",
+		"_id_", "agent_id_history_1", "attempt_id_1", "expires_at_1",
 	})
-	if err := database.Collection(collectionName).Indexes().DropOne(ctx, "agent_id_1_scope_1"); err != nil {
+	if err := database.Collection(collectionName).Indexes().DropOne(ctx, "agent_id_1_scope_active_1"); err != nil {
 		t.Fatal("remove index to verify startup reconciliation", err)
 	}
 
@@ -53,13 +53,13 @@ func TestMigrateAndEnsureIndexesHaveSeparateLifecycles(t *testing.T) {
 		t.Fatal("reapply identity migration", err)
 	}
 	assertIndexNames(t, ctx, database.Collection(collectionName), []string{
-		"_id_", "credential_hash_1", "credential_id_1", "instance_uid_1", "node_id_1",
+		"_id_", "credential_hash_1", "credential_id_1", "instance_uid_active_1", "node_id_active_1",
 	})
 	if err := EnsureIndexes(ctx, database); err != nil {
 		t.Fatal("reconcile identity indexes on subsequent startup", err)
 	}
 	assertIndexNames(t, ctx, database.Collection(collectionName), []string{
-		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1_scope_1", "instance_uid_1", "node_id_1",
+		"_id_", "credential_hash_1", "credential_id_1", "agent_id_1_scope_active_1", "instance_uid_active_1", "node_id_active_1",
 	})
 }
 
@@ -96,13 +96,29 @@ func TestEnsureIndexesReplacesLegacyAgentUniqueness(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := collection.Indexes().CreateMany(ctx, []driver.IndexModel{
+		{Keys: bson.D{{Key: "agent_id", Value: 1}, {Key: "scope", Value: 1}}, Options: options.Index().SetName("agent_id_1_scope_1").SetUnique(true)},
+		{Keys: bson.D{{Key: "node_id", Value: 1}}, Options: options.Index().SetName("node_id_1").SetUnique(true).SetPartialFilterExpression(bson.M{"node_id": bson.M{"$type": "string"}})},
+		{Keys: bson.D{{Key: "instance_uid", Value: 1}}, Options: options.Index().SetName("instance_uid_1").SetUnique(true).SetPartialFilterExpression(bson.M{"instance_uid": bson.M{"$type": "string"}})},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := collection.InsertOne(ctx, bson.M{"agent_id": "legacy-agent", "credential_id": "legacy-opamp", "credential_hash": "legacy-hash", "status": "ACTIVE"}); err != nil {
+		t.Fatal(err)
+	}
+	attempts := database.Collection(attemptsCollectionName)
+	if _, err := attempts.Indexes().CreateOne(ctx, driver.IndexModel{
+		Keys: bson.D{{Key: "agent_id", Value: 1}}, Options: options.Index().SetName("agent_id_1").SetUnique(true),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := attempts.InsertOne(ctx, bson.M{"attempt_id": "legacy-attempt", "agent_id": "legacy-agent"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := EnsureIndexes(ctx, database); err != nil {
 		t.Fatal(err)
 	}
-	assertIndexNames(t, ctx, collection, []string{"_id_", "credential_hash_1", "credential_id_1", "agent_id_1_scope_1", "instance_uid_1", "node_id_1"})
+	assertIndexNames(t, ctx, collection, []string{"_id_", "credential_hash_1", "credential_id_1", "agent_id_1_scope_active_1", "instance_uid_active_1", "node_id_active_1"})
 	var legacy record
 	if err := collection.FindOne(ctx, bson.M{"agent_id": "legacy-agent"}).Decode(&legacy); err != nil {
 		t.Fatal(err)
@@ -110,11 +126,17 @@ func TestEnsureIndexesReplacesLegacyAgentUniqueness(t *testing.T) {
 	if legacy.Scope != "opamp.connect" {
 		t.Fatalf("legacy scope = %q", legacy.Scope)
 	}
+	if _, err := attempts.InsertOne(ctx, bson.M{"attempt_id": "replacement-attempt", "agent_id": "legacy-agent"}); err != nil {
+		t.Fatalf("second historical attempt rejected: %v", err)
+	}
 	if _, err := collection.InsertOne(ctx, bson.M{"agent_id": "legacy-agent", "credential_id": "new-otlp", "credential_hash": "new-otlp-hash", "scope": "otlp.write", "status": "ACTIVE"}); err != nil {
 		t.Fatalf("second scoped credential rejected: %v", err)
 	}
 	if _, err := collection.InsertOne(ctx, bson.M{"agent_id": "legacy-agent", "credential_id": "duplicate-opamp", "credential_hash": "duplicate-opamp-hash", "scope": "opamp.connect", "status": "ACTIVE"}); !driver.IsDuplicateKeyError(err) {
 		t.Fatalf("duplicate OpAMP scope error=%v", err)
+	}
+	if _, err := collection.InsertOne(ctx, bson.M{"agent_id": "legacy-agent", "credential_id": "revoked-opamp", "credential_hash": "revoked-opamp-hash", "scope": "opamp.connect", "status": "REVOKED"}); err != nil {
+		t.Fatalf("revoked OpAMP history should not block a replacement: %v", err)
 	}
 }
 
@@ -280,20 +302,26 @@ func assertIdentityIndexOptions(t *testing.T, ctx context.Context, collection *d
 		if unique, _ := documentValue(index, "unique").(bool); !unique {
 			t.Errorf("index %q is not unique", name)
 		}
-		if name == "instance_uid_1" {
+		if name == "instance_uid_active_1" {
 			partial, ok := documentValue(index, "partialFilterExpression").(bson.D)
 			condition, conditionOK := documentValue(partial, "instance_uid").(bson.D)
 			filterType, typeOK := documentValue(condition, "$type").(string)
-			if !ok || !conditionOK || !typeOK || filterType != "string" {
+			if !ok || !conditionOK || !typeOK || filterType != "string" || documentValue(partial, "status") != "ACTIVE" {
 				t.Errorf("instance UID index has wrong partial filter: %#v", documentValue(index, "partialFilterExpression"))
 			}
 		}
-		if name == "node_id_1" {
+		if name == "node_id_active_1" {
 			partial, ok := documentValue(index, "partialFilterExpression").(bson.D)
 			condition, conditionOK := documentValue(partial, "node_id").(bson.D)
 			filterType, typeOK := documentValue(condition, "$type").(string)
-			if !ok || !conditionOK || !typeOK || filterType != "string" {
+			if !ok || !conditionOK || !typeOK || filterType != "string" || documentValue(partial, "status") != "ACTIVE" {
 				t.Errorf("Node ID index has wrong partial filter: %#v", documentValue(index, "partialFilterExpression"))
+			}
+		}
+		if name == "agent_id_1_scope_active_1" {
+			partial, ok := documentValue(index, "partialFilterExpression").(bson.D)
+			if !ok || documentValue(partial, "status") != "ACTIVE" {
+				t.Errorf("active credential index has wrong partial filter: %#v", documentValue(index, "partialFilterExpression"))
 			}
 		}
 	}

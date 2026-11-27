@@ -173,6 +173,12 @@ func TestEnrollmentExchangeRecoveryAndGateSerialization(t *testing.T) {
 	if !sameOTLPCredential(first.OTLPCredential, replayed.OTLPCredential) {
 		t.Fatal("same attempt must replay its separate OTLP credential")
 	}
+	if _, err := service.Exchange(ctx, application.ExchangeInvitationCommand{
+		AttemptID: "attempt-enrollment-replay", AgentID: command.AgentID, InvitationToken: invitation.Secret,
+		RecoveryProof: "replay-proof-enrollment-1-012345678901234567890123",
+	}); !errors.Is(err, domain.ErrInvitationRejected) {
+		t.Fatalf("a new attempt must not replay a consumed invitation, got %v", err)
+	}
 	if _, err := store.verifier.VerifyOTLP(ctx, first.Credential); !errors.Is(err, domain.ErrCredentialRejected) {
 		t.Fatalf("OpAMP token accepted for OTLP: %v", err)
 	}
@@ -704,6 +710,126 @@ func TestEnrollmentGateCloseRacingExchangeReportsWinningBinding(t *testing.T) {
 	}
 	if !errors.Is(exchangeErr, domain.ErrInvitationRejected) {
 		t.Fatalf("exchange lost race with closed gate for unexpected reason: %v", exchangeErr)
+	}
+}
+
+func TestRevokedAgentCanReEnrollWithoutLosingCredentialHistory(t *testing.T) {
+	ctx, database := newMigrationTestDatabase(t)
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal("apply enrollment schema migration", err)
+	}
+	if err := EnsureIndexes(ctx, database); err != nil {
+		t.Fatal("reconcile enrollment indexes", err)
+	}
+	store, err := NewEnrollmentStore(database, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal("create enrollment store", err)
+	}
+	if err := store.VerifyTransactionSupport(ctx); err != nil {
+		t.Fatal("verify transaction support", err)
+	}
+	service := application.EnrollmentService{
+		Store: store, Revoker: store.verifier, DefaultInviteTTL: 10 * time.Minute,
+		MaximumInviteTTL: time.Hour, RecoveryTTL: 24 * time.Hour,
+		OpAMPEndpoint: "wss://fleet.example.test/v1/opamp",
+	}
+	const agentID = "550e8400-e29b-41d4-a716-446655440001"
+	const nodeID = "node-reenroll"
+	firstInvite, err := service.CreateInvitation(ctx, application.CreateInvitationCommand{
+		OperationID: "operation-reenroll-1", CorePrincipalID: "core", IdempotencyKey: "key-reenroll-1",
+		ActorID: "operator", NodeID: nodeID,
+	})
+	if err != nil {
+		t.Fatal("create first invitation", err)
+	}
+	first, err := service.Exchange(ctx, application.ExchangeInvitationCommand{
+		AttemptID: "attempt-reenroll-1", AgentID: agentID, InvitationToken: firstInvite.Secret,
+		RecoveryProof: "recovery-proof-reenroll-1-012345678901234567890123",
+	})
+	if err != nil {
+		t.Fatal("first enrollment", err)
+	}
+	principal, err := domain.NewPrincipal(agentID, first.CredentialID)
+	if err != nil {
+		t.Fatal("create first principal", err)
+	}
+	uid := []byte("0123456789abcdef")
+	if err := store.verifier.BindAndAuthorize(ctx, principal, uid); err != nil {
+		t.Fatal("bind first Supervisor UID", err)
+	}
+	if err := service.RevokeAgent(ctx, agentID); err != nil {
+		t.Fatal("revoke first credentials", err)
+	}
+	if _, err := store.verifier.Verify(ctx, first.Credential); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("old OpAMP credential after revoke = %v", err)
+	}
+	if _, err := store.verifier.VerifyOTLP(ctx, first.OTLPCredential.Token); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("old OTLP credential after revoke = %v", err)
+	}
+	secondInvite, err := service.CreateInvitation(ctx, application.CreateInvitationCommand{
+		OperationID: "operation-reenroll-2", CorePrincipalID: "core", IdempotencyKey: "key-reenroll-2",
+		ActorID: "operator", NodeID: nodeID,
+	})
+	if err != nil {
+		t.Fatal("create replacement invitation", err)
+	}
+	second, err := service.Exchange(ctx, application.ExchangeInvitationCommand{
+		AttemptID: "attempt-reenroll-2", AgentID: agentID, InvitationToken: secondInvite.Secret,
+		RecoveryProof: "recovery-proof-reenroll-2-012345678901234567890123",
+	})
+	if err != nil {
+		t.Fatalf("same-Agent re-enrollment: %v", err)
+	}
+	if second.AgentID != first.AgentID || second.NodeID != first.NodeID || second.CredentialID == first.CredentialID {
+		t.Fatalf("replacement enrollment identity/history = first:%+v second:%+v", first, second)
+	}
+	if _, err := store.verifier.Verify(ctx, first.Credential); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("old OpAMP credential after replacement = %v", err)
+	}
+	if _, err := store.verifier.VerifyOTLP(ctx, first.OTLPCredential.Token); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("old OTLP credential after replacement = %v", err)
+	}
+	if _, err := store.verifier.Verify(ctx, second.Credential); err != nil {
+		t.Fatalf("replacement OpAMP credential: %v", err)
+	}
+	if _, err := store.verifier.VerifyOTLP(ctx, second.OTLPCredential.Token); err != nil {
+		t.Fatalf("replacement OTLP credential: %v", err)
+	}
+	secondPrincipal, err := domain.NewPrincipal(agentID, second.CredentialID)
+	if err != nil {
+		t.Fatal("create replacement principal", err)
+	}
+	if err := store.verifier.BindAndAuthorize(ctx, secondPrincipal, uid); err != nil {
+		t.Fatalf("bind retained Supervisor UID: %v", err)
+	}
+	if count, err := database.Collection(attemptsCollectionName).CountDocuments(ctx, bson.M{"agent_id": agentID}); err != nil || count != 2 {
+		t.Fatalf("retained attempts count=%d err=%v", count, err)
+	}
+	var credentials []record
+	cursor, err := database.Collection(collectionName).Find(ctx, bson.M{"agent_id": agentID})
+	if err != nil {
+		t.Fatal("query credential history", err)
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	if err := cursor.All(ctx, &credentials); err != nil {
+		t.Fatal("read credential history", err)
+	}
+	if len(credentials) != 4 {
+		t.Fatalf("credential history count=%d want 4", len(credentials))
+	}
+	active, revoked := 0, 0
+	for _, credential := range credentials {
+		switch credential.Status {
+		case "ACTIVE":
+			active++
+		case "REVOKED":
+			revoked++
+		default:
+			t.Fatalf("unexpected credential status %q", credential.Status)
+		}
+	}
+	if active != 2 || revoked != 2 {
+		t.Fatalf("active/revoked credential history=%d/%d want 2/2", active, revoked)
 	}
 }
 

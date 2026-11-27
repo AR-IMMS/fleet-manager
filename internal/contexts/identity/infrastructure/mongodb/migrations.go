@@ -60,13 +60,15 @@ func EnsureIndexes(ctx context.Context, database *mongo.Database) error {
 	if err != nil {
 		return errors.New("identity verifier indexes unavailable")
 	}
-	if err := dropLegacyAgentIndex(ctx, collection); err != nil {
-		return err
+	for _, name := range []string{"agent_id_1", "agent_id_1_scope_1", "node_id_1", "instance_uid_1"} {
+		if err := dropNamedIndex(ctx, collection, name); err != nil {
+			return errors.New("legacy identity index replacement unavailable")
+		}
 	}
 	return EnsureEnrollmentIndexes(ctx, database)
 }
 
-func dropLegacyAgentIndex(ctx context.Context, collection *mongo.Collection) error {
+func dropNamedIndex(ctx context.Context, collection *mongo.Collection, name string) error {
 	cursor, err := collection.Indexes().List(ctx)
 	if err != nil {
 		return errors.New("identity index inventory unavailable")
@@ -79,14 +81,14 @@ func dropLegacyAgentIndex(ctx context.Context, collection *mongo.Collection) err
 		return errors.New("identity index inventory unavailable")
 	}
 	for _, index := range indexes {
-		if index.Name != "agent_id_1" {
+		if index.Name != name {
 			continue
 		}
 		if err := collection.Indexes().DropOne(ctx, index.Name); err != nil {
 			// Concurrent startup may have removed it after the inventory read.
 			var commandErr mongo.CommandError
 			if !errors.As(err, &commandErr) || commandErr.Code != 27 {
-				return errors.New("legacy agent index removal unavailable")
+				return errors.New("legacy index removal unavailable")
 			}
 		}
 		break
@@ -187,8 +189,8 @@ func identityIndexes() []mongo.IndexModel {
 	return []mongo.IndexModel{
 		{Keys: bson.D{{Key: "credential_hash", Value: 1}}, Options: options.Index().SetName("credential_hash_1").SetUnique(true)},
 		{Keys: bson.D{{Key: "credential_id", Value: 1}}, Options: options.Index().SetName("credential_id_1").SetUnique(true)},
-		{Keys: bson.D{{Key: "agent_id", Value: 1}, {Key: "scope", Value: 1}}, Options: options.Index().SetName("agent_id_1_scope_1").SetUnique(true)},
-		{Keys: bson.D{{Key: "node_id", Value: 1}}, Options: options.Index().SetName("node_id_1").SetUnique(true).SetPartialFilterExpression(bson.M{"node_id": bson.M{"$type": "string"}})},
-		{Keys: bson.D{{Key: "instance_uid", Value: 1}}, Options: options.Index().SetName("instance_uid_1").SetUnique(true).SetPartialFilterExpression(bson.M{"instance_uid": bson.M{"$type": "string"}})},
+		{Keys: bson.D{{Key: "agent_id", Value: 1}, {Key: "scope", Value: 1}}, Options: options.Index().SetName("agent_id_1_scope_active_1").SetUnique(true).SetPartialFilterExpression(bson.M{"status": "ACTIVE"})},
+		{Keys: bson.D{{Key: "node_id", Value: 1}}, Options: options.Index().SetName("node_id_active_1").SetUnique(true).SetPartialFilterExpression(bson.M{"node_id": bson.M{"$type": "string"}, "status": "ACTIVE"})},
+		{Keys: bson.D{{Key: "instance_uid", Value: 1}}, Options: options.Index().SetName("instance_uid_active_1").SetUnique(true).SetPartialFilterExpression(bson.M{"instance_uid": bson.M{"$type": "string"}, "status": "ACTIVE"})},
 	}
 }
