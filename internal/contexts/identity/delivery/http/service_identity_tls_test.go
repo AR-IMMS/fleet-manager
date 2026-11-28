@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/AR-IMMS/fleet-manager/internal/contexts/identity/domain"
-	httpserver "github.com/AR-IMMS/fleet-manager/internal/platform/http-server"
+	httpserver "github.com/AR-IMMS/fleet-manager/internal/platform/httpserver"
 	"github.com/AR-IMMS/fleet-manager/internal/platform/testutil/pki"
 	"github.com/go-chi/chi/v5"
 )

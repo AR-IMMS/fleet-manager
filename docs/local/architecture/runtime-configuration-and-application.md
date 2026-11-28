@@ -10,7 +10,7 @@
 - `Config` embeds `OpAMPConfig`; existing flat JSON/YAML names and promoted Go field selectors are preserved.
 - `internal/app/config.go` provides aliases and `LoadConfig` as the application-facing facade. The configuration type itself currently lives in `platform/config`.
 - `internal/app` validates inputs, assembles runtime dependencies, coordinates startup and cleanup, and owns readiness state.
-- `internal/platform/mongodb` and `internal/platform/http-server` own the database and HTTP listener mechanics.
+- `internal/platform/mongodb` and `internal/platform/httpserver` own the database and HTTP listener mechanics.
 
 Configuration loading validates the settings before application construction. `NewApplication` validates again and requires a logger. It does not open external resources. Configuration can contain secrets, especially the MongoDB URI, so do not log or serialize it.
 

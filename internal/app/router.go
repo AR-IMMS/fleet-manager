@@ -8,7 +8,7 @@ import (
 	"github.com/AR-IMMS/fleet-manager/internal/platform/httpapi"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/AR-IMMS/fleet-manager/internal/platform/http-server"
+	"github.com/AR-IMMS/fleet-manager/internal/platform/httpserver"
 )
 
 // newRouter assembles HTTP routes owned by the application.

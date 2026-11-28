@@ -26,7 +26,7 @@ internal/
 ├── platform/
 │   ├── config/                   # Technical env-backed config parsing and defaults
 │   ├── env/                      # Reusable environment reader
-│   ├── http-server/              # Shared listener, health response and shutdown adapter
+│   ├── httpserver/               # Shared listener, health response and shutdown adapter
 │   ├── logging/                  # Structured logger adapter
 │   └── mongodb/                  # MongoDB driver adapter
 └── shared/                       # Add only when a concrete shared mechanism is needed

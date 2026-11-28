@@ -9,7 +9,7 @@ import (
 	identityhttp "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/delivery/http"
 	identityopamp "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/delivery/opamp"
 	identitymongo "github.com/AR-IMMS/fleet-manager/internal/contexts/identity/infrastructure/mongodb"
-	httpserver "github.com/AR-IMMS/fleet-manager/internal/platform/http-server"
+	httpserver "github.com/AR-IMMS/fleet-manager/internal/platform/httpserver"
 	"github.com/AR-IMMS/fleet-manager/internal/platform/mongodb"
 )
 
